@@ -18,6 +18,7 @@
 #include <mpi.h>
 #include <ucp/api/ucp.h>
 #include <vector>
+#include <iostream>
 
 #include "../src/comm.cuh"
 #include "../src/error.cuh"
@@ -163,6 +164,10 @@ int main(int argc, char *argv[])
     free_table(join_result);
 
     communicator.finalize();
+
+    if (mpi_rank == 0) {
+        std::cerr << "Test case \"prebuild\" passes successfully.\n";
+    }
 
     return 0;
 }
