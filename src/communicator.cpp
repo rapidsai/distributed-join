@@ -381,6 +381,29 @@ void UCXBufferCommunicator::warmup_cache()
     }
 }
 
+/**
+ * Get the communication tag passed to UCX from user defined tag and source rank.
+ *
+ * This function is necessary because UCX receive API does not specify a source.
+ * Therefore, the current implementation uses tag matching to differentiate messages
+ * coming from different ranks.
+ *
+ * @param[in] user_tag      User-specified tag
+ * @param[in] source_rank   Rank number of the sender of this message
+ *
+ * @returns                 Communication tag passed to UCX
+ */
+uint64_t get_comm_tag(int user_tag, int source_rank)
+{
+    uint64_t comm_tag = 0LLU;
+    // user_tag occupies the most significant 32 bits of comm_tag
+    comm_tag |= ((uint64_t)user_tag << 32);
+    // source rank occupies the least significant 32 bits of comm_tag
+    comm_tag |= (uint64_t)source_rank;
+
+    return comm_tag;
+}
+
 
 static void send_handler(void *request, ucs_status_t status)
 {
@@ -411,10 +434,7 @@ static void send_handler(void *request, ucs_status_t status)
 
         /* Construct communication tag */
 
-        uint64_t comm_tag = 0LLU;
-        comm_tag |= ((uint64_t)(info->user_tag) << 32);
-        comm_tag |= ((uint64_t)(info->comm->mpi_rank & 0x0000FFFF) << 16);
-        comm_tag |= ((uint64_t)(ibatch & 0x0000FFFF));
+        uint64_t comm_tag = get_comm_tag(info->user_tag, info->comm->mpi_rank);
 
         /* Send the communication buffer to the remote rank */
 
@@ -459,12 +479,8 @@ static void send_handler(void *request, ucs_status_t status)
 
 comm_handle_t UCXBufferCommunicator::send(const void *buf, int64_t count, int element_size, int dest, int tag)
 {
-    // Set user tag to the most significant 32 bits and source rank to the next 16 bits
-    uint64_t comm_tag = 0LLU;
-    comm_tag |= ((uint64_t)tag << 32);
-    comm_tag |= ((uint64_t)(mpi_rank & 0x0000FFFF) << 16);
-    // Since the first message will be the buffer size, special flag FFFF is used for least significant 16 bits
-    comm_tag |= (uint64_t)0x0000FFFF;
+    // Get the communication tag for sending the number of elements (count)
+    uint64_t comm_tag = get_comm_tag(tag, mpi_rank);
 
     // Since send operation is fully async to the user, we need to keep the count buffer alive
     int64_t *count_buf = (int64_t *)malloc(sizeof(int64_t));  // TODO: never freed?
@@ -568,10 +584,7 @@ static void recv_handler(void *request, ucs_status_t status,
                                        nelements_remaining : nelements_per_batch);
 
     if (nelements_current_batch > 0) {
-        uint64_t comm_tag = 0LLU;
-        comm_tag |= ((uint64_t)(info->user_tag) << 32);
-        comm_tag |= ((uint64_t)(info->source & 0x0000FFFF) << 16);
-        comm_tag |= ((uint64_t)(info->ibatch & 0x0000FFFF));
+        uint64_t comm_tag = get_comm_tag(info->user_tag, info->source);
 
         request = ucp_tag_recv_nb(
             info->comm->ucp_worker, info->comm_buffer, nelements_current_batch, ucp_dt_make_contig(element_size),
@@ -618,12 +631,8 @@ comm_handle_t UCXBufferCommunicator::recv_helper(void **buf, int64_t *count, int
     else
         recved_count = count;
 
-    // Construct tag for receiving message size. The most significant 32 bits are user tag, followed by 16 bits of the
-    // source rank. The least significant 16 bits is special flag FFFF.
-    uint64_t comm_tag = 0LLU;
-    comm_tag |= ((uint64_t)tag << 32);
-    comm_tag |= ((uint64_t)(source & 0x0000FFFF) << 16);
-    comm_tag |= (uint64_t)0x0000FFFF;
+    // Construct tag for receiving the number of elements
+    uint64_t comm_tag = get_comm_tag(tag, source);
 
     // Request to receive the message size
     ucs_status_ptr_t request = ucp_tag_recv_nb(

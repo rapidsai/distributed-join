@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <vector>
+#include <iostream>
 
 #include "../src/communicator.h"
 #include "../src/error.cuh"
@@ -111,5 +112,10 @@ int main(int argc, char *argv[])
     }
 
     communicator.finalize();
+
+    if (mpi_rank == 0) {
+        std::cerr << "Test case \"buffer_communicator\" passes successfully.\n";
+    }
+
     return 0;
 }

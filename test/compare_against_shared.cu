@@ -20,6 +20,7 @@
 #include <rmm/rmm.h>
 #include <mpi.h>
 #include <ucp/api/ucp.h>
+#include <iostream>
 
 #include "../src/cudf_helper.cuh"
 #include "../src/distributed.cuh"
@@ -193,6 +194,10 @@ int main(int argc, char *argv[])
     }
 
     communicator.finalize();
+
+    if (mpi_rank == 0) {
+        std::cerr << "Test case \"compare_against_shared\" passes successfully.\n";
+    }
 
     return 0;
 }
