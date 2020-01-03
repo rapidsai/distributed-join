@@ -29,6 +29,7 @@
 
 #include "../src/communicator.h"
 #include "../src/error.cuh"
+#include "../src/distribute_table.cuh"
 
 #define SIZE 30000
 #define OVER_DECOMPOSITION_FACTOR 1
@@ -59,9 +60,10 @@ __global__ void verify_correctness(const int *key, const int *col1, const int *c
  * contains 0,3,6,9...etc. The second column is filled with consecutive integers and is used as
  * payload column.
  */
-void generate_table(std::vector<std::unique_ptr<cudf::column> > &table, int multiple)
+std::unique_ptr<cudf::experimental::table>
+generate_table(int multiple)
 {
-    assert(table.size() == 0);
+    std::vector<std::unique_ptr<cudf::column> > table;
 
     // compute the number of thread blocks and thread block size for fill_buffer kernel
     const int block_size {128};
@@ -80,6 +82,8 @@ void generate_table(std::vector<std::unique_ptr<cudf::column> > &table, int mult
     auto payload_column = cudf::make_numeric_column(cudf::data_type(cudf::INT32), SIZE);
     fill_buffer<<<nblocks, block_size>>>(payload_column->mutable_view().head<int>(), 1);
     table.push_back(std::move(payload_column));
+
+    return std::make_unique<cudf::experimental::table>(std::move(table));
 }
 
 
@@ -98,19 +102,18 @@ int main(int argc, char *argv[])
 
     /* Generate input tables */
 
-    std::vector<std::unique_ptr<cudf::column> > left_table;
-    std::vector<std::unique_ptr<cudf::column> > right_table;
+    std::unique_ptr<cudf::experimental::table> left_table;
+    std::unique_ptr<cudf::experimental::table> right_table;
 
     if (mpi_rank == 0) {
-        generate_table(left_table, 3);
-        generate_table(right_table, 5);
+        left_table = generate_table(3);
+        right_table = generate_table(5);
     }
 
     /* Distribute input tables among ranks */
 
-    // @TODO: uncomment this after porting distribute_table to new column API
-    // auto local_left_table = distribute_table(left_table, &communicator);
-    // auto local_right_table = distribute_table(right_table, &communicator);
+    auto local_left_table = distribute_table(left_table.get(), &communicator);
+    auto local_right_table = distribute_table(right_table.get(), &communicator);
 
     /* Distributed join */
 
@@ -118,11 +121,8 @@ int main(int argc, char *argv[])
     std::unique_ptr<cudf::experimental::table> join_result;
 
     if (mpi_rank == 0) {
-        cudf::table_view left_table_view { {left_table[0]->view(), left_table[1]->view()} };
-        cudf::table_view right_table_view { {right_table[0]->view(), right_table[1]->view()} };
-
         join_result = cudf::experimental::inner_join(
-            left_table_view, right_table_view,
+            left_table->view(), right_table->view(),
             {0}, {0}, {std::pair<cudf::size_type, cudf::size_type>(0, 0)}
         );
     }
