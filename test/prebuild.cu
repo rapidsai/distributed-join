@@ -14,17 +14,21 @@
  * limitations under the License.
  */
 
-#include <rmm/rmm.h>
-#include <mpi.h>
-#include <ucp/api/ucp.h>
 #include <vector>
 #include <iostream>
+#include <cassert>
+#include <memory>
+#include <mpi.h>
 
-#include "../src/comm.cuh"
-#include "../src/error.cuh"
-#include "../src/distributed.cuh"
-#include "../src/error.cuh"
+#include <cudf/column/column.hpp>
+#include <cudf/column/column_factories.hpp>
+#include <cudf/table/table.hpp>
+#include <cudf/table/table_view.hpp>
+#include <cudf/types.hpp>
+#include <cudf/join.hpp>
 
+#include "../src/communicator.h"
+#include "../src/error.cuh"
 
 #define SIZE 30000
 #define OVER_DECOMPOSITION_FACTOR 1
@@ -37,7 +41,7 @@ __global__ void fill_buffer(int *buffer, int multiple)
 }
 
 
-__global__ void verify_prebuild_correctness(int *key, int *col1, int *col2, int size)
+__global__ void verify_correctness(const int *key, const int *col1, const int *col2, int size)
 {
     for (size_t i = threadIdx.x + blockDim.x * blockIdx.x; i < size; i += blockDim.x * gridDim.x) {
         assert(key[i] % 15 == 0);
@@ -47,49 +51,35 @@ __global__ void verify_prebuild_correctness(int *key, int *col1, int *col2, int 
 }
 
 
-gdf_column* generate_column(int *buffer)
+/**
+ * This helper function generates the left/right table used for testing join.
+ *
+ * There are two columns in each table. The first column is filled with consecutive multiple of
+ * argument *multiple*, and is used as key column. For example, if *multiple* is 3, the column
+ * contains 0,3,6,9...etc. The second column is filled with consecutive integers and is used as
+ * payload column.
+ */
+void generate_table(std::vector<std::unique_ptr<cudf::column> > &table, int multiple)
 {
-    gdf_column* new_column = new gdf_column;
+    assert(table.size() == 0);
 
-    CHECK_ERROR(
-        gdf_column_view(new_column, buffer, nullptr, SIZE, GDF_INT32),
-        GDF_SUCCESS, "gdf_column_view"
-    );
-
-    return new_column;
-}
-
-
-void generate_table(std::vector<gdf_column *> &table, int multiple)
-{
-    table.resize(2, nullptr);
-
-    int *col1_buffer;
-    CHECK_ERROR(RMM_ALLOC(&col1_buffer, SIZE * sizeof(int), 0), RMM_SUCCESS, "RMM_ALLOC");
-
-    const int block_size = 128;
+    // compute the number of thread blocks and thread block size for fill_buffer kernel
+    const int block_size {128};
     int nblocks {-1};
 
-    CHECK_ERROR(
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&nblocks, fill_buffer, block_size, 0),
-        cudaSuccess, "cudaOccupancyMaxActiveBlocksPerMultiprocessor"
+    CUDA_RT_CALL(
+        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&nblocks, fill_buffer, block_size, 0)
     );
 
-    fill_buffer<<<nblocks, block_size>>>(col1_buffer, multiple);
+    // construct the key column
+    auto key_column = cudf::make_numeric_column(cudf::data_type(cudf::INT32), SIZE);
+    fill_buffer<<<nblocks, block_size>>>(key_column->mutable_view().head<int>(), multiple);
+    table.push_back(std::move(key_column));
 
-    table[0] = generate_column(col1_buffer);
-
-    int *col2_buffer;
-    CHECK_ERROR(RMM_ALLOC(&col2_buffer, SIZE * sizeof(int), 0), RMM_SUCCESS, "RMM_ALLOC");
-
-    CHECK_ERROR(
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&nblocks, linear_sequence<int, size_t>, block_size, 0),
-        cudaSuccess, "cudaOccupancyMaxActiveBlocksPerMultiprocessor"
-    );
-
-    linear_sequence<<<nblocks, block_size>>>(col2_buffer, SIZE);
-
-    table[1] = generate_column(col2_buffer);
+    // construct the payload column
+    auto payload_column = cudf::make_numeric_column(cudf::data_type(cudf::INT32), SIZE);
+    fill_buffer<<<nblocks, block_size>>>(payload_column->mutable_view().head<int>(), 1);
+    table.push_back(std::move(payload_column));
 }
 
 
@@ -106,62 +96,58 @@ int main(int argc, char *argv[])
     communicator.setup_cache(2 * mpi_size, 100'000LL);
     communicator.warmup_cache();
 
-    /* Generate tables */
+    /* Generate input tables */
 
-    std::vector<gdf_column *> left_table;
-    std::vector<gdf_column *> right_table;
+    std::vector<std::unique_ptr<cudf::column> > left_table;
+    std::vector<std::unique_ptr<cudf::column> > right_table;
 
     if (mpi_rank == 0) {
         generate_table(left_table, 3);
         generate_table(right_table, 5);
     }
 
-    std::vector<gdf_column *> local_left_table = distribute_table(left_table, &communicator);
-    std::vector<gdf_column *> local_right_table = distribute_table(right_table, &communicator);
+    /* Distribute input tables among ranks */
+
+    // @TODO: uncomment this after porting distribute_table to new column API
+    // auto local_left_table = distribute_table(left_table, &communicator);
+    // auto local_right_table = distribute_table(right_table, &communicator);
 
     /* Distributed join */
 
-    std::vector<gdf_column *> join_result;
+    // @TODO: currently this shared-memory join is just a placeholder
+    std::unique_ptr<cudf::experimental::table> join_result;
 
-    distributed_join(local_left_table, local_right_table, join_result, &communicator, OVER_DECOMPOSITION_FACTOR);
+    if (mpi_rank == 0) {
+        cudf::table_view left_table_view { {left_table[0]->view(), left_table[1]->view()} };
+        cudf::table_view right_table_view { {right_table[0]->view(), right_table[1]->view()} };
 
-    std::vector<gdf_column *> merged_join_result;
-
-    collect_tables(merged_join_result, join_result, &communicator);
+        join_result = cudf::experimental::inner_join(
+            left_table_view, right_table_view,
+            {0}, {0}, {std::pair<cudf::size_type, cudf::size_type>(0, 0)}
+        );
+    }
 
     /* Verify Correctness */
 
-    const int block_size = 128;
+    const int block_size {128};
     int nblocks {-1};
 
-    CHECK_ERROR(
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&nblocks, verify_prebuild_correctness, block_size, 0),
-        cudaSuccess, "cudaOccupancyMaxActiveBlocksPerMultiprocessor"
-    );
+    CUDA_RT_CALL(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &nblocks, verify_correctness, block_size, 0
+    ));
 
     if (mpi_rank == 0) {
-        assert(merged_join_result[0]->size == 6000);
+        assert(join_result->num_rows() == 6000);
 
-        verify_prebuild_correctness<<<nblocks, block_size>>>(
-            (int *)merged_join_result[1]->data,
-            (int *)merged_join_result[0]->data,
-            (int *)merged_join_result[2]->data,
-            merged_join_result[0]->size
+        verify_correctness<<<nblocks, block_size>>>(
+            join_result->get_column(0).view().head<int>(),
+            join_result->get_column(1).view().head<int>(),
+            join_result->get_column(2).view().head<int>(),
+            join_result->num_rows()
         );
     }
 
     /* Cleanup */
-
-    free_table(local_left_table);
-    free_table(local_right_table);
-
-    if (mpi_rank == 0) {
-        free_table(merged_join_result);
-        free_table(left_table);
-        free_table(right_table);
-    }
-
-    free_table(join_result);
 
     communicator.finalize();
 
