@@ -22,6 +22,9 @@
 #include <mpi.h>
 #include <cassert>
 
+#include <cudf/types.hpp>
+#include <rmm/device_buffer.hpp>
+
 #include "communicator.h"
 #include "error.cuh"
 
@@ -63,7 +66,7 @@ MPI_Datatype mpi_dtype_from_c_type()
  * Send data from the current rank to other ranks according to offset.
  *
  * @param[in] data                The starting address of data to be sent in device buffer.
- * @param[in] offset              Array of length mpi_size + 1. Items in *data* with indicies from offset[i] to
+ * @param[in] offset              Vector of length mpi_size + 1. Items in *data* with indicies from offset[i] to
  *                                offset[i+1] will be sent to rank i.
  * @param[in] item_size           The size of each item.
  * @param[in] communicator        An instance of 'Communicator' used for communication.
@@ -72,12 +75,13 @@ MPI_Datatype mpi_dtype_from_c_type()
  * @returns                       A vector holding the handles of all aysnc requests. See 'wait' and 'waitall' in
  *                                'Communicator'.
  */
-std::vector<comm_handle_t> send_data_by_offset(
-                                               const void *data,
-                                               const int *offset,
-                                               size_t item_size,
-                                               Communicator *communicator,
-                                               bool self_send=true)
+std::vector<comm_handle_t>
+send_data_by_offset(
+    const void *data,
+    std::vector<int> offset,
+    size_t item_size,
+    Communicator *communicator,
+    bool self_send=true)
 {
     int mpi_rank {communicator->mpi_rank};
     int mpi_size {communicator->mpi_size};
@@ -95,7 +99,9 @@ std::vector<comm_handle_t> send_data_by_offset(
         const void *start_addr = (void *)((char *)data + offset[itarget_rank] * item_size);
 
         // send buffer to the target node
-        requests[itarget_rank] = communicator->send(start_addr, count, item_size, itarget_rank, offset_tag);
+        requests[itarget_rank] = communicator->send(
+            start_addr, count, item_size, itarget_rank, offset_tag
+        );
     }
 
     return requests;
@@ -108,7 +114,7 @@ std::vector<comm_handle_t> send_data_by_offset(
  * @param[out] data         The data received from each rank. This argument does not need to be preallocated, but the
  *                          caller is responsible for freeing this buffer using RMM_FREE. See
  *                          'merge_free_received_offset'.
- * @param[out] bucket_count The number of items received from each rank.
+ * @param[out] count        The number of items received from each rank.
  * @param[in] item_size     The size of each item. Used for passing to receive function in UCX.
  * @param[in] communicator  An instance of 'Communicator' used for communication.
  * @param[in] self_recv     Whether recving data from itself. If this argument is false, data[mpi_rank] will be nullptr
@@ -116,18 +122,19 @@ std::vector<comm_handle_t> send_data_by_offset(
  * @returns                 A vector holding the handles of all aysnc requests. See 'wait' and 'waitall' in
  *                          'Communicator'.
  */
-std::vector<comm_handle_t> recv_data_by_offset(
-                                               std::vector<void *> &data,
-                                               std::vector<int64_t> &bucket_count,
-                                               size_t item_size,
-                                               Communicator *communicator,
-                                               bool self_recv=true)
+std::vector<comm_handle_t>
+recv_data_by_offset(
+    std::vector<void *> &data,
+    std::vector<int64_t> &count,
+    size_t item_size,
+    Communicator *communicator,
+    bool self_recv=true)
 {
     int mpi_rank {communicator->mpi_rank};
     int mpi_size {communicator->mpi_size};
 
     data.resize(mpi_size, nullptr);
-    bucket_count.resize(mpi_size, 0);
+    count.resize(mpi_size, 0);
 
     std::vector<comm_handle_t> requests(mpi_size, nullptr);
 
@@ -136,7 +143,7 @@ std::vector<comm_handle_t> recv_data_by_offset(
             continue;
 
         requests[isource_rank] = communicator->recv(
-            &data[isource_rank], &bucket_count[isource_rank], item_size, isource_rank, offset_tag
+            &data[isource_rank], &count[isource_rank], item_size, isource_rank, offset_tag
         );
     }
 
@@ -158,13 +165,14 @@ std::vector<comm_handle_t> recv_data_by_offset(
  * @returns                        Merged device buffer. The user of this function is responsible for freeing this
  *                                 returned buffer using RMM_FREE.
  */
-void* merge_free_received_offset(
-                                 std::vector<void *> received_data,
-                                 const std::vector<int64_t> &bucket_count,
-                                 size_t item_size,
-                                 int64_t &total_count,
-                                 Communicator *communicator=nullptr,
-                                 bool self_free=true)
+rmm::device_buffer
+merge_free_received_offset(
+    std::vector<void *> received_data,
+    const std::vector<int64_t> &bucket_count,
+    size_t item_size,
+    int64_t &total_count,
+    Communicator *communicator=nullptr,
+    bool self_free=true)
 {
     total_count = 0LL;
 
@@ -172,11 +180,9 @@ void* merge_free_received_offset(
         total_count += count;
     }
 
-    void* merged_data {nullptr};
+    auto merged_data = rmm::device_buffer(total_count * item_size);
 
-    RMM_CALL(RMM_ALLOC(&merged_data, total_count * item_size, 0));
-
-    void* current_data = merged_data;
+    void* current_data = merged_data.data();
 
     for (int irank = 0; irank < bucket_count.size(); irank++) {
         CUDA_RT_CALL(cudaMemcpy(

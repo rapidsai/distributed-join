@@ -20,14 +20,166 @@
 #include <utility>
 #include <vector>
 #include <memory>
+#include <thread>
+#include <type_traits>
 
 #include <cudf/types.hpp>
+#include <cudf/column/column.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
 #include <cudf/hashing.hpp>
+#include <cudf/join.hpp>
+#include <rmm/device_buffer.hpp>
 
 #include "error.cuh"
 #include "communicator.h"
+#include "comm.cuh"
+
+using std::vector;
+using cudf::column;
+using cudf::experimental::table;
+
+/**
+ * All-to-all communication of a single batch without merging.
+ *
+ * For distributed join with overlapping communication and computation, this function can be used
+ * in the communication thread, while the merging can be performed inside the local join thread.
+ * This is necessary because merging involves device-to-device copy, which uses SM.
+ *
+ * This function needs to be called collectively by all ranks in MPI_COMM_WORLD. For every ranks,
+ * all arguments are significant.
+ *
+ * @param[in] hashed Rearranged table by hash function.
+ * @param[in] offset Vector of length mpi_size + 1 such that offset[i] represents the start index
+ * of bucket i in `hashed`.
+ * @param[out] local_buckets The received table from each rank. local_buckets[i][j] points to the
+ * data from rank j of column i. This argument does not need to be preallocated, but the caller is
+ * responsible for freeing this buffer using RMM_FREE.
+ * @param[out] bucket_count The number of items received from each rank. bucket_count[i][j] stores
+ * the number of items received from rank j of column i.
+ * @param[in] communicator An instance of `Communicator` used for communication.
+ *
+ * @TODO: Use unique_ptr for managing the lifetime of `local_buckets`.
+ */
+void
+all_to_all_comm(
+    cudf::table_view hashed,
+    vector<cudf::size_type> offset,
+    vector<vector<void *> > &local_buckets,  // [icol, ibucket]
+    vector<vector<int64_t> > &bucket_count,  // [icol, ibucket]
+    Communicator *communicator)
+{
+    int mpi_rank {communicator->mpi_rank};
+
+    local_buckets.resize(hashed.num_columns());
+    bucket_count.resize(hashed.num_columns());
+
+    // In this function, offset has type cudf::size_type. In send_data_by_offset, offset has type
+    // int. This assert ensures these two types are compatible.
+    static_assert(
+        std::is_same<int, cudf::size_type>::value,
+        "int and size_type are not the same"
+    );
+
+    for (cudf::size_type icol = 0; icol < hashed.num_columns(); icol++) {
+        cudf::size_type dtype_size = cudf::size_of(hashed.column(icol).type());
+
+        // commuicate with other ranks
+        vector<comm_handle_t> send_requests = send_data_by_offset(
+            hashed.column(icol).head(), offset, dtype_size, communicator, false
+        );
+
+        vector<comm_handle_t> recv_requests = recv_data_by_offset(
+            local_buckets[icol], bucket_count[icol], dtype_size, communicator, false
+        );
+
+        // For bucket to the rank itself, simply compute the pointer to the right location.
+        // No communication is necesssary.
+        local_buckets[icol][mpi_rank] = (void *)(hashed.column(icol).head<char>()
+                                                 + offset[mpi_rank] * dtype_size);
+        bucket_count[icol][mpi_rank] = offset[mpi_rank + 1] - offset[mpi_rank];
+
+        communicator->waitall(send_requests);
+        communicator->waitall(recv_requests);
+    }
+}
+
+/**
+ * Merge and free the received buckets from 'all_to_all_comm'.
+ *
+ * @param[in] buckets Received table from each rank during 'all_to_all_comm'. The device buffer
+ * inside will be freed by this function.
+ * @param[in] counts Number of items received from each rank, got from 'all_to_all_comm'.
+ * @param[in] dtypes Column types
+ *
+ * @return Table formed by merging all buckets in *buckets*.
+ */
+std::unique_ptr<table>
+all_to_all_merge_data(
+    vector<vector<void *> > &buckets,
+    vector<vector<int64_t> > &counts,
+    vector<cudf::data_type> &dtypes,
+    Communicator *communicator)
+{
+    vector<std::unique_ptr<column> > merged_table;
+
+    for (int icol = 0; icol < buckets.size(); icol++) {
+        size_t dtype_size = cudf::size_of(dtypes[icol]);
+
+        int64_t total_count;
+        rmm::device_buffer merged_data = merge_free_received_offset(
+            buckets[icol], counts[icol], dtype_size, total_count, communicator, false
+        );
+
+        merged_table.push_back(std::make_unique<column>(dtypes[icol], total_count, std::move(merged_data)));
+    }
+
+    return std::make_unique<table>(std::move(merged_table));
+}
+
+
+void
+inner_join_func(
+    vector<vector<vector<void *> > > &left_buckets,
+    vector<vector<vector<int64_t> > > &left_counts,
+    vector<cudf::data_type> &left_dtypes,
+    vector<vector<vector<void *> > > &right_buckets,
+    vector<vector<vector<int64_t> > > &right_counts,
+    vector<cudf::data_type> &right_dtypes,
+    vector<std::unique_ptr<table> > &result_table_batches,
+    vector<cudf::size_type> const& left_on,
+    vector<cudf::size_type> const& right_on,
+    vector<std::pair<cudf::size_type, cudf::size_type>> const& columns_in_common,
+    vector<bool> &flags,
+    Communicator *communicator)
+{
+    CUDA_RT_CALL(cudaSetDevice(communicator->current_device));
+
+    for (int ibatch = 0; ibatch < flags.size(); ibatch++) {
+        // busy waiting for all-to-all communication of ibatch to finish
+        while (!flags[ibatch]) {;}
+
+        std::unique_ptr<table> local_left = all_to_all_merge_data(
+            left_buckets[ibatch], left_counts[ibatch], left_dtypes, communicator
+        );
+
+        std::unique_ptr<table> local_right = all_to_all_merge_data(
+            right_buckets[ibatch], right_counts[ibatch], right_dtypes, communicator
+        );
+
+        if (local_left->num_rows() && local_right->num_rows()) {
+            // Perform local join only when both left and right tables are not empty.
+            // If either is empty, the local join will return the other table, which is not desired.
+            result_table_batches[ibatch] = cudf::experimental::inner_join(
+                local_left->view(), local_right->view(),
+                left_on, right_on, columns_in_common
+            );
+        } else {
+            result_table_batches[ibatch] = std::make_unique<table>();
+        }
+    }
+}
+
 
 /**
  * Top level interface for distributed inner join.
@@ -61,13 +213,13 @@
  * `left(including common columns)+right(excluding common columns)`. The join result is the
  * concatenation of the returned tables on all ranks.
  */
-std::unique_ptr<cudf::experimental::table>
+std::unique_ptr<table>
 distributed_inner_join(
     cudf::table_view const& left,
     cudf::table_view const& right,
-    std::vector<cudf::size_type> const& left_on,
-    std::vector<cudf::size_type> const& right_on,
-    std::vector<std::pair<cudf::size_type, cudf::size_type>> const& columns_in_common,
+    vector<cudf::size_type> const& left_on,
+    vector<cudf::size_type> const& right_on,
+    vector<std::pair<cudf::size_type, cudf::size_type>> const& columns_in_common,
     Communicator *communicator,
     int over_decom_factor=1)
 {
@@ -86,13 +238,13 @@ distributed_inner_join(
     // @TODO: The follow section is not need once https://github.com/rapidsai/cudf/pull/3636 is
     // merged.
     // {{{
-    std::vector<cudf::size_type> left_offset {0};
-    std::vector<cudf::table_view> tables_to_concat;
+    vector<cudf::size_type> left_offset {0};
+    vector<cudf::table_view> tables_to_concat;
     for (auto &table_ptr : tmp_left) {
         left_offset.push_back(left_offset.back() + table_ptr->num_rows());
         tables_to_concat.push_back(table_ptr->view());
     }
-    auto hashed_left = cudf::experimental::concatenate(tables_to_concat);
+    std::unique_ptr<table> hashed_left = cudf::experimental::concatenate(tables_to_concat);
 
     std::vector<cudf::size_type> right_offset {0};
     tables_to_concat.clear();
@@ -100,10 +252,75 @@ distributed_inner_join(
         right_offset.push_back(right_offset.back() + table_ptr->num_rows());
         tables_to_concat.push_back(table_ptr->view());
     }
-    auto hashed_right = cudf::experimental::concatenate(tables_to_concat);
+    std::unique_ptr<table> hashed_right = cudf::experimental::concatenate(tables_to_concat);
     // }}}
 
-    return std::unique_ptr<cudf::experimental::table>(nullptr);
+    /* Get column data types */
+
+    cudf::size_type nleft_columns = hashed_left->num_columns();
+    cudf::size_type nright_columns = hashed_right->num_columns();
+
+    vector<cudf::data_type> left_dtypes(nleft_columns);
+    vector<cudf::data_type> right_dtypes(nright_columns);
+
+    for (int icol = 0; icol < nleft_columns; icol ++) {
+        left_dtypes[icol] = hashed_left->view().column(icol).type();
+    }
+
+    for (int icol = 0; icol < nright_columns; icol ++) {
+        right_dtypes[icol] = hashed_right->view().column(icol).type();
+    }
+
+    /* Declare storage for received buckets */
+
+    vector<vector<vector<void *> > > left_buckets(over_decom_factor);  // [ibatch, icol, ibucket]
+    vector<vector<vector<void *> > > right_buckets(over_decom_factor);  // [ibatch, icol, ibucket]
+    vector<vector<vector<int64_t> > > left_counts(over_decom_factor);  // [ibatch, icol, ibucket]
+    vector<vector<vector<int64_t> > > right_counts(over_decom_factor);  // [ibatch, icol, ibucket]
+    vector<bool> flags(over_decom_factor, false);  // whether each batch has finished communication
+    vector<std::unique_ptr<table> > result_table_batches(over_decom_factor);
+
+    /* Launch inner join thread */
+
+    std::thread inner_join_thread(
+        inner_join_func,
+        std::ref(left_buckets), std::ref(left_counts), std::ref(left_dtypes),
+        std::ref(right_buckets), std::ref(right_counts), std::ref(right_dtypes),
+        std::ref(result_table_batches), left_on, right_on, columns_in_common,
+        std::ref(flags), communicator
+    );
+
+    /* Use the current thread for all-to-all communication */
+
+    for (int ibatch = 0; ibatch < over_decom_factor; ibatch ++) {
+
+        // the start and end index for left_offset and right_offset for the ibatch
+        size_t start_idx = ibatch * mpi_size;
+        size_t end_idx = (ibatch + 1) * mpi_size + 1;
+
+        // all-to-all communication for the ibatch
+        all_to_all_comm(
+            hashed_left->view(),
+            vector<cudf::size_type>(&left_offset[start_idx], &left_offset[end_idx]),
+            left_buckets[ibatch], left_counts[ibatch], communicator
+        );
+
+        all_to_all_comm(
+            hashed_right->view(),
+            vector<cudf::size_type>(&right_offset[start_idx], &right_offset[end_idx]),
+            right_buckets[ibatch], right_counts[ibatch], communicator
+        );
+
+        // mark the communication of ibatch as finished.
+        // the join thread is safe to start performing local join on ibatch
+        flags[ibatch] = true;
+    }
+
+    /* Wait for all join batches to finish */
+
+    inner_join_thread.join();
+
+    return std::unique_ptr<table>(nullptr);
 }
 
 #endif  // __DISTRIBUTED_JOIN
