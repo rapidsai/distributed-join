@@ -87,7 +87,7 @@ int main(int argc, char *argv[])
     MPI_Barrier(MPI_COMM_WORLD);
     if (mpi_rank == 0) {
         std::cerr << "Elasped time (s) " << stop - start << std::endl;
-        std::cerr << "Bandwidth (GB/s) " << (double)SIZE * (mpi_size - 5) * REPEAT / (stop - start) / 1e9 << std::endl;
+        std::cerr << "Bandwidth (GB/s) " << (double)SIZE * (mpi_size - 1) * REPEAT / (stop - start) / 1e9 << std::endl;
     }
 
     /* Cleanup */

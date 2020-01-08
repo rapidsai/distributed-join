@@ -146,7 +146,7 @@ inner_join_func(
     vector<vector<vector<void *> > > &right_buckets,
     vector<vector<vector<int64_t> > > &right_counts,
     vector<cudf::data_type> &right_dtypes,
-    vector<std::unique_ptr<table> > &result_table_batches,
+    vector<std::unique_ptr<table> > &batch_join_results,
     vector<cudf::size_type> const& left_on,
     vector<cudf::size_type> const& right_on,
     vector<std::pair<cudf::size_type, cudf::size_type>> const& columns_in_common,
@@ -170,12 +170,12 @@ inner_join_func(
         if (local_left->num_rows() && local_right->num_rows()) {
             // Perform local join only when both left and right tables are not empty.
             // If either is empty, the local join will return the other table, which is not desired.
-            result_table_batches[ibatch] = cudf::experimental::inner_join(
+            batch_join_results[ibatch] = cudf::experimental::inner_join(
                 local_left->view(), local_right->view(),
                 left_on, right_on, columns_in_common
             );
         } else {
-            result_table_batches[ibatch] = std::make_unique<table>();
+            batch_join_results[ibatch] = std::make_unique<table>();
         }
     }
 }
@@ -246,7 +246,7 @@ distributed_inner_join(
     }
     std::unique_ptr<table> hashed_left = cudf::experimental::concatenate(tables_to_concat);
 
-    std::vector<cudf::size_type> right_offset {0};
+    vector<cudf::size_type> right_offset {0};
     tables_to_concat.clear();
     for (auto &table_ptr : tmp_right) {
         right_offset.push_back(right_offset.back() + table_ptr->num_rows());
@@ -278,7 +278,7 @@ distributed_inner_join(
     vector<vector<vector<int64_t> > > left_counts(over_decom_factor);  // [ibatch, icol, ibucket]
     vector<vector<vector<int64_t> > > right_counts(over_decom_factor);  // [ibatch, icol, ibucket]
     vector<bool> flags(over_decom_factor, false);  // whether each batch has finished communication
-    vector<std::unique_ptr<table> > result_table_batches(over_decom_factor);
+    vector<std::unique_ptr<table> > batch_join_results(over_decom_factor);
 
     /* Launch inner join thread */
 
@@ -286,7 +286,7 @@ distributed_inner_join(
         inner_join_func,
         std::ref(left_buckets), std::ref(left_counts), std::ref(left_dtypes),
         std::ref(right_buckets), std::ref(right_counts), std::ref(right_dtypes),
-        std::ref(result_table_batches), left_on, right_on, columns_in_common,
+        std::ref(batch_join_results), left_on, right_on, columns_in_common,
         std::ref(flags), communicator
     );
 
@@ -316,11 +316,22 @@ distributed_inner_join(
         flags[ibatch] = true;
     }
 
-    /* Wait for all join batches to finish */
-
+    // wait for all join batches to finish
     inner_join_thread.join();
 
-    return std::unique_ptr<table>(nullptr);
+    // hashed left and right tables should not be needed now
+    hashed_left.reset();
+    hashed_right.reset();
+
+    /* Merge join results from different batches into a single table */
+
+    vector<cudf::table_view> batch_join_results_view;
+
+    for (auto &table_ptr : batch_join_results) {
+        batch_join_results_view.push_back(table_ptr->view());
+    }
+
+    return cudf::experimental::concatenate(batch_join_results_view);
 }
 
 #endif  // __DISTRIBUTED_JOIN

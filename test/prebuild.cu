@@ -30,6 +30,7 @@
 #include "../src/communicator.h"
 #include "../src/error.cuh"
 #include "../src/distribute_table.cuh"
+#include "../src/distributed_join.cuh"
 
 #define SIZE 30000
 #define OVER_DECOMPOSITION_FACTOR 1
@@ -117,15 +118,11 @@ int main(int argc, char *argv[])
 
     /* Distributed join */
 
-    // @TODO: currently this shared-memory join is just a placeholder
-    std::unique_ptr<cudf::experimental::table> join_result;
-
-    if (mpi_rank == 0) {
-        join_result = cudf::experimental::inner_join(
-            left_table->view(), right_table->view(),
-            {0}, {0}, {std::pair<cudf::size_type, cudf::size_type>(0, 0)}
-        );
-    }
+    auto join_result = distributed_inner_join(
+        local_left_table->view(), local_right_table->view(),
+        {0}, {0}, {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
+        &communicator
+    );
 
     /* Verify Correctness */
 
@@ -136,16 +133,12 @@ int main(int argc, char *argv[])
         &nblocks, verify_correctness, block_size, 0
     ));
 
-    if (mpi_rank == 0) {
-        assert(join_result->num_rows() == 6000);
-
-        verify_correctness<<<nblocks, block_size>>>(
-            join_result->get_column(0).view().head<int>(),
-            join_result->get_column(1).view().head<int>(),
-            join_result->get_column(2).view().head<int>(),
-            join_result->num_rows()
-        );
-    }
+    verify_correctness<<<nblocks, block_size>>>(
+        join_result->get_column(0).view().head<int>(),
+        join_result->get_column(1).view().head<int>(),
+        join_result->get_column(2).view().head<int>(),
+        join_result->num_rows()
+    );
 
     /* Cleanup */
 
