@@ -18,6 +18,7 @@
 #define __DISTRIBUTE_TABLE
 
 #include <vector>
+#include <memory>
 
 #include <cudf/types.hpp>
 #include <cudf/column/column.hpp>
@@ -199,6 +200,102 @@ distribute_table(
     }
 
     return std::make_unique<cudf::experimental::table>(std::move(local_table));
+}
+
+/**
+ * Merge tables from all worker ranks to the root rank.
+ *
+ * This function needs to be called collectively by all ranks in MPI_COMM_WORLD.
+ *
+ * @param[in] table The table on each rank to be sent to the master rank. Significant on all ranks.
+ * @param[in] communicator An instance of `Communicator` used for communication.
+ *
+ * @return Merged table on the root rank. `nullptr` on all other ranks.
+ */
+std::unique_ptr<cudf::experimental::table>
+collect_tables(
+    cudf::table_view table,
+    Communicator *communicator)
+{
+    int mpi_rank {communicator->mpi_rank};
+    int mpi_size {communicator->mpi_size};
+
+    int ncols = table.num_columns();
+    int nrows = table.num_rows();
+
+    /* Send the table size to the root */
+
+    std::vector<cudf::size_type> table_nrows(mpi_size, -1);
+    MPI_CALL(
+        MPI_Gather(
+            &nrows, 1, mpi_dtype_from_c_type<cudf::size_type>(),
+            table_nrows.data(), 1, mpi_dtype_from_c_type<cudf::size_type>(),
+            0, MPI_COMM_WORLD
+        )
+    );
+
+    /* Compute the scan of table_size on root */
+
+    std::vector<cudf::size_type> table_nrows_scan(mpi_size + 1, -1);
+    if (mpi_rank == 0) {
+        table_nrows_scan[0] = 0;
+        for (int irank = 0; irank < mpi_size; irank++) {
+            table_nrows_scan[irank + 1] = table_nrows_scan[irank] + table_nrows[irank];
+        }
+    }
+
+    /* Construct receive buffer on root */
+
+    std::vector<std::unique_ptr<cudf::column> > merged_columns;
+    if (mpi_rank == 0) {
+        for (int icol = 0; icol < ncols; icol++) {
+            merged_columns.push_back(std::move(
+                cudf::make_numeric_column(table.column(icol).type(), table_nrows_scan.back())
+            ));
+        }
+    }
+
+    /* Send table from each rank to root */
+
+    for (int icol = 0; icol < ncols; icol++) {
+
+        std::size_t dtype_size = cudf::size_of(table.column(icol).type());
+
+        if (mpi_rank == 0) {
+
+            std::vector<comm_handle_t> requests(mpi_size, nullptr);
+
+            for (int irank = 1; irank < mpi_size; irank++) {
+                void *start_addr = (void *)(merged_columns[icol]->mutable_view().head<char>()
+                                            + table_nrows_scan[irank] * dtype_size);
+
+                requests[irank] = communicator->recv(
+                    start_addr, table_nrows[irank], dtype_size, irank, collect_table_tag
+                );
+            }
+
+            CUDA_RT_CALL(cudaMemcpy(
+                merged_columns[icol]->mutable_view().head(), table.column(icol).head(),
+                table_nrows[0] * dtype_size, cudaMemcpyDeviceToDevice)
+            );
+
+            communicator->waitall(requests);
+
+        } else {
+
+            comm_handle_t request = communicator->send(
+                table.column(icol).head(), nrows, dtype_size, 0, collect_table_tag
+            );
+
+            communicator->wait(request);
+        }
+    }
+
+    if (mpi_rank == 0) {
+        return std::make_unique<cudf::experimental::table>(std::move(merged_columns));
+    } else {
+        return std::unique_ptr<cudf::experimental::table>(nullptr);
+    }
 }
 
 #endif

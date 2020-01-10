@@ -32,6 +32,8 @@
 #include "../src/distribute_table.cuh"
 #include "../src/distributed_join.cuh"
 
+using cudf::experimental::table;
+
 #define SIZE 30000
 #define OVER_DECOMPOSITION_FACTOR 1
 
@@ -61,10 +63,10 @@ __global__ void verify_correctness(const int *key, const int *col1, const int *c
  * contains 0,3,6,9...etc. The second column is filled with consecutive integers and is used as
  * payload column.
  */
-std::unique_ptr<cudf::experimental::table>
+std::unique_ptr<table>
 generate_table(int multiple)
 {
-    std::vector<std::unique_ptr<cudf::column> > table;
+    std::vector<std::unique_ptr<cudf::column> > new_table;
 
     // compute the number of thread blocks and thread block size for fill_buffer kernel
     const int block_size {128};
@@ -77,14 +79,14 @@ generate_table(int multiple)
     // construct the key column
     auto key_column = cudf::make_numeric_column(cudf::data_type(cudf::INT32), SIZE);
     fill_buffer<<<nblocks, block_size>>>(key_column->mutable_view().head<int>(), multiple);
-    table.push_back(std::move(key_column));
+    new_table.push_back(std::move(key_column));
 
     // construct the payload column
     auto payload_column = cudf::make_numeric_column(cudf::data_type(cudf::INT32), SIZE);
     fill_buffer<<<nblocks, block_size>>>(payload_column->mutable_view().head<int>(), 1);
-    table.push_back(std::move(payload_column));
+    new_table.push_back(std::move(payload_column));
 
-    return std::make_unique<cudf::experimental::table>(std::move(table));
+    return std::make_unique<table>(std::move(new_table));
 }
 
 
@@ -103,8 +105,8 @@ int main(int argc, char *argv[])
 
     /* Generate input tables */
 
-    std::unique_ptr<cudf::experimental::table> left_table;
-    std::unique_ptr<cudf::experimental::table> right_table;
+    std::unique_ptr<table> left_table;
+    std::unique_ptr<table> right_table;
 
     if (mpi_rank == 0) {
         left_table = generate_table(3);
@@ -124,21 +126,29 @@ int main(int argc, char *argv[])
         &communicator
     );
 
+    /* Merge table from worker ranks to the root rank */
+
+    std::unique_ptr<table> merged_table = collect_tables(join_result->view(), &communicator);
+
     /* Verify Correctness */
 
-    const int block_size {128};
-    int nblocks {-1};
+    if (mpi_rank == 0) {
+        const int block_size {128};
+        int nblocks {-1};
 
-    CUDA_RT_CALL(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-        &nblocks, verify_correctness, block_size, 0
-    ));
+        CUDA_RT_CALL(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+            &nblocks, verify_correctness, block_size, 0
+        ));
 
-    verify_correctness<<<nblocks, block_size>>>(
-        join_result->get_column(0).view().head<int>(),
-        join_result->get_column(1).view().head<int>(),
-        join_result->get_column(2).view().head<int>(),
-        join_result->num_rows()
-    );
+        assert(merged_table->num_rows() == 6000);
+
+        verify_correctness<<<nblocks, block_size>>>(
+            merged_table->get_column(0).view().head<int>(),
+            merged_table->get_column(1).view().head<int>(),
+            merged_table->get_column(2).view().head<int>(),
+            merged_table->num_rows()
+        );
+    }
 
     /* Cleanup */
 
