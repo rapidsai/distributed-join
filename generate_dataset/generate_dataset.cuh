@@ -24,7 +24,6 @@
 #include <thrust/distance.h>
 #include <cassert>
 
-#include <cudf/cudf.h>
 #include <rmm/rmm.h>
 #include <rmm/thrust_rmm_allocator.h>
 
