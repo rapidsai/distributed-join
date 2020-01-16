@@ -138,6 +138,59 @@ all_to_all_merge_data(
 }
 
 
+/**
+ * All-to-all communication with merging for a single batch.
+ *
+ * This function needs to be called collectively by all ranks in MPI_COMM_WORLD. For every ranks,
+ * all arguments are significant.
+ *
+ * @param[in] input Input table to be communicated.
+ * @param[in] offset Vector of length mpi_size + 1 such that offset[i] represents the starting row
+ * index of bucket i in `input`.
+ * @param[in] communicator An instance of `Communicator` used for communication.
+ *
+ * @return The communication result which gathers bucket i of `input` on rank i.
+ */
+std::unique_ptr<table>
+all_to_all_comm_single_batch(
+    cudf::table_view input,
+    vector<cudf::size_type> offset,
+    Communicator *communicator)
+{
+    vector<std::unique_ptr<column> > recv_columns;
+
+    for (cudf::size_type icol = 0; icol < input.num_columns(); icol++) {
+
+        std::size_t dtype_size = cudf::size_of(input.column(icol).type());
+
+        vector<comm_handle_t> send_requests = send_data_by_offset(
+            input.column(icol).head(), offset, dtype_size, communicator
+        );
+
+        vector<void *> recv_data;
+        vector<int64_t> count;
+
+        vector<comm_handle_t> recv_requests = recv_data_by_offset(
+            recv_data, count, dtype_size, communicator
+        );
+
+        communicator->waitall(send_requests);
+        communicator->waitall(recv_requests);
+
+        int64_t nrows;
+        rmm::device_buffer merged_data = merge_free_received_offset(
+            recv_data, count, dtype_size, nrows, communicator
+        );
+
+        recv_columns.push_back(std::make_unique<column>(
+            input.column(icol).type(), nrows, std::move(merged_data))
+        );
+    }
+
+    return std::make_unique<table>(std::move(recv_columns));
+}
+
+
 void
 inner_join_func(
     vector<vector<vector<void *> > > &left_buckets,

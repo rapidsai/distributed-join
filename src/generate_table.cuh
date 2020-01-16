@@ -51,7 +51,7 @@ cudf::data_type gdf_dtype_from_col_type()
 
 
 /**
-* Generate a build table and a probe table for testing join performance.
+* Generate a build table and a probe table for testing distributed join.
 *
 * Both the build table and the probe table have two columns. The first column is the key column,
 * with datatype KEY_T. The second column is the payload column, with datatype PAYLOAD_T.
