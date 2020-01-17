@@ -29,6 +29,7 @@
 
 #include "error.cuh"
 #include "../generate_dataset/generate_dataset.cuh"
+#include "distributed_join.cuh"
 
 using cudf::experimental::table;
 
@@ -118,6 +119,112 @@ generate_build_probe_tables(cudf::size_type build_table_nrows,
 
     auto build_table = std::make_unique<table>(std::move(build));
     auto probe_table = std::make_unique<table>(std::move(probe));
+
+    return std::make_pair(std::move(build_table), std::move(probe_table));
+}
+
+
+template <typename data_type>
+void add_constant_to_column(gdf_column *column, data_type constant)
+{
+    auto buffer_ptr = thrust::device_pointer_cast(reinterpret_cast<data_type *>(column->data));
+
+    thrust::for_each(buffer_ptr, buffer_ptr + column->size,
+                     [=] __device__ (data_type &i) {
+                        i += constant;
+                     });
+}
+
+
+/**
+ * This function generates build table and probe table distributed, and it need to be called
+ * collectively by all ranks in MPI_COMM_WORLD.
+ *
+ * @param[in] build_table_nrows_per_rank   The number of rows of build table on each rank.
+ * @param[in] probe_table_nrows_per_rank   The number of rows of probe table on each rank.
+ * @param[in] selectivity                  The percentage of keys in the probe table present in the build table.
+ * @param[in] rand_max_per_rank            The lottery size on each rank. This argument should be set larger than
+ *                                         `build_table_size_per_rank`.
+ * @param[in] uniq_build_tbl_keys          Whether the keys in the build table are unique.
+ * @param[in] communicator                 An instance of `Communicator` used for communication.
+ *
+ * Note: require build_table_size_per_rank % mpi_rank == 0 and probe_table_size_per_rank % mpi_rank == 0.
+ *
+ * @return A pair of generated build and probe table distributed on each rank.
+ */
+template<typename KEY_T, typename PAYLOAD_T>
+std::pair<std::unique_ptr<table>, std::unique_ptr<table> >
+generate_tables_distributed(
+    cudf::size_type build_table_nrows_per_rank,
+    cudf::size_type probe_table_nrows_per_rank,
+    const double selectivity,
+    const KEY_T rand_max_per_rank,
+    const bool uniq_build_tbl_keys,
+    Communicator *communicator)
+{
+    // Algorithm used for distributed generation:
+    // Rank i generates build and probe table independently with keys randomly selected from range
+    // [i*uniq_build_tbl_keys, (i+1)*uniq_build_tbl_keys] (called pre_shuffle_table). Afterwards,
+    // pre_shuffle_table will be divided into N chunks with the same number of rows, and then send
+    // chunk j to rank j. This all-to-all communication will make each local table have keys
+    // uniformly from the whole range.
+
+    // Get MPI information
+
+    int mpi_rank, mpi_size;
+    MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
+
+    // Generate local build and probe table on each rank
+
+    std::unique_ptr<table> pre_shuffle_build_table;
+    std::unique_ptr<table> pre_shuffle_probe_table;
+
+    std::tie(pre_shuffle_build_table, pre_shuffle_probe_table) = \
+        generate_build_probe_tables<KEY_T, PAYLOAD_T>(
+            build_table_nrows_per_rank, probe_table_nrows_per_rank,
+            selectivity, rand_max_per_rank, uniq_build_tbl_keys
+        );
+
+    // Add constant to build and probe table to make sure the range is correct
+
+    add_constant_to_column<KEY_T>(
+        pre_shuffle_build_table->view().column(0).head<KEY_T>(), rand_max_per_rank * mpi_rank
+    );
+
+    add_constant_to_column<KEY_T>(
+        pre_shuffle_probe_table->view().column(0).head<KEY_T>(), rand_max_per_rank * mpi_rank
+    );
+
+    add_constant_to_column<PAYLOAD_T>(
+        pre_shuffle_build_table->view().column(1).head<PAYLOAD_T>(),
+        build_table_nrows_per_rank * mpi_rank
+    );
+
+    add_constant_to_column<PAYLOAD_T>(
+        pre_shuffle_probe_table->view().column(1).head<PAYLOAD_T>(),
+        probe_table_nrows_per_rank * mpi_rank
+    );
+
+    // Construct buffer offset to indicate the start indices to each rank
+
+    std::vector<cudf::size_type> build_table_offset(mpi_size + 1);
+    std::vector<cudf::size_type> probe_table_offset(mpi_size + 1);
+
+    for (cudf::size_type irank = 0; irank <= mpi_size; irank ++) {
+        build_table_offset[irank] = build_table_nrows_per_rank / mpi_size * irank;
+        probe_table_offset[irank] = probe_table_nrows_per_rank / mpi_size * irank;
+    }
+
+    // Send each bucket to the desired target rank
+
+    std::unique_ptr<table> build_table = all_to_all_comm_single_batch(
+        pre_shuffle_build_table->view(), build_table_offset, communicator
+    );
+
+    std::unique_ptr<table> probe_table = all_to_all_comm_single_batch(
+        pre_shuffle_probe_table->view(), probe_table_offset, communicator
+    );
 
     return std::make_pair(std::move(build_table), std::move(probe_table));
 }
