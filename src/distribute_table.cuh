@@ -136,7 +136,7 @@ distribute_cols(
  */
 std::unique_ptr<cudf::experimental::table>
 distribute_table(
-    cudf::experimental::table *global_table,
+    cudf::table_view global_table,
     Communicator *communicator)
 {
     /* Get MPI information */
@@ -150,7 +150,7 @@ distribute_table(
     cudf::size_type global_table_size {-1};
 
     if (mpi_rank == 0) {
-        global_table_size = global_table->num_rows();
+        global_table_size = global_table.num_rows();
     }
 
     MPI_Bcast(&global_table_size, 1, mpi_size_type, 0, MPI_COMM_WORLD);
@@ -160,7 +160,7 @@ distribute_table(
     cudf::size_type ncols {-1};
 
     if (mpi_rank == 0) {
-        ncols = global_table->num_columns();
+        ncols = global_table.num_columns();
     }
 
     MPI_Bcast(&ncols, 1, mpi_size_type, 0, MPI_COMM_WORLD);
@@ -172,7 +172,7 @@ distribute_table(
     for (cudf::size_type icol = 0; icol < ncols; icol++) {
 
         if (mpi_rank == 0)
-            columns_dtype[icol] = global_table->view().column(icol).type();
+            columns_dtype[icol] = global_table.column(icol).type();
 
         MPI_Bcast(&columns_dtype[icol], sizeof(cudf::size_type), MPI_CHAR, 0, MPI_COMM_WORLD);
     }
@@ -194,7 +194,7 @@ distribute_table(
         cudf::column_view global_col;
 
         if (mpi_rank == 0)
-            global_col = global_table->view().column(icol);
+            global_col = global_table.column(icol);
 
         distribute_cols(global_col, local_table[icol]->mutable_view(), communicator);
     }

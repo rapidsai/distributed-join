@@ -107,16 +107,21 @@ int main(int argc, char *argv[])
 
     std::unique_ptr<table> left_table;
     std::unique_ptr<table> right_table;
+    cudf::table_view left_view;
+    cudf::table_view right_view;
 
     if (mpi_rank == 0) {
         left_table = generate_table(3);
         right_table = generate_table(5);
+
+        left_view = left_table->view();
+        right_view = right_table->view();
     }
 
     /* Distribute input tables among ranks */
 
-    auto local_left_table = distribute_table(left_table.get(), &communicator);
-    auto local_right_table = distribute_table(right_table.get(), &communicator);
+    auto local_left_table = distribute_table(left_view, &communicator);
+    auto local_right_table = distribute_table(right_view, &communicator);
 
     /* Distributed join */
 
