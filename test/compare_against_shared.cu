@@ -14,18 +14,21 @@
  * limitations under the License.
  */
 
-#include <cstdlib>
-#include <cstring>
-#include <vector>
-#include <rmm/rmm.h>
-#include <mpi.h>
-#include <ucp/api/ucp.h>
 #include <iostream>
+#include <vector>
+#include <memory>
+#include <utility>
 
-#include "../src/cudf_helper.cuh"
-#include "../src/distributed.cuh"
+#include <cudf/table/table.hpp>
+#include <cudf/join.hpp>
+#include <cudf/sorting.hpp>
+#include <cudf/types.hpp>
+
+#include "../src/communicator.h"
 #include "../src/error.cuh"
-#include "../src/comm.cuh"
+#include "../src/generate_table.cuh"
+#include "../src/distribute_table.cuh"
+#include "../src/distributed_join.cuh"
 
 #define BUILD_TABLE_SIZE 1'000'000
 #define PROBE_TABLE_SIZE 5'000'000
@@ -36,6 +39,21 @@
 
 #define KEY_T int
 #define PAYLOAD_T int
+
+using cudf::experimental::table;
+
+
+template<typename data_type>
+__global__ void
+verify_correctness(const data_type *data1, const data_type *data2, cudf::size_type size)
+{
+    const cudf::size_type start_idx = threadIdx.x + blockDim.x * blockIdx.x;
+    const cudf::size_type stride = blockDim.x * gridDim.x;
+
+    for (cudf::size_type idx = start_idx; idx < size; idx += stride) {
+        assert(data1[idx] == data2[idx]);
+    }
+}
 
 
 int main(int argc, char *argv[])
@@ -53,145 +71,91 @@ int main(int argc, char *argv[])
 
     /* Generate build table and probe table and compute reference solution */
 
-    std::vector<gdf_column *> build_table;
-    std::vector<gdf_column *> probe_table;
-    std::vector<gdf_column *> reference_result;
+    std::unique_ptr<table> build;
+    std::unique_ptr<table> probe;
+    std::unique_ptr<table> reference;
 
-    gdf_context ctxt = {
-        0,                     // input data is not sorted
-        gdf_method::GDF_HASH,  // hash based join
-        0
-    };
-
-    int columns_to_join[] = {0};
+    cudf::table_view build_view;
+    cudf::table_view probe_view;
 
     if (mpi_rank == 0) {
-        generate_build_probe_tables<KEY_T, PAYLOAD_T>(
-            build_table, BUILD_TABLE_SIZE, probe_table, PROBE_TABLE_SIZE,
-            SELECTIVITY, RAND_MAX_VAL, IS_BUILD_TABLE_KEY_UNIQUE
+        std::tie(build, probe) = generate_build_probe_tables<KEY_T, PAYLOAD_T>(
+            BUILD_TABLE_SIZE, PROBE_TABLE_SIZE, SELECTIVITY, RAND_MAX_VAL, IS_BUILD_TABLE_KEY_UNIQUE
         );
 
-        reference_result.resize(build_table.size() + probe_table.size() - 1, nullptr);
+        build_view = build->view();
+        probe_view = probe->view();
 
-        for (auto & col_ptr : reference_result) {
-            col_ptr = new gdf_column;
-        }
-
-        CHECK_ERROR(
-            gdf_inner_join(build_table.data(), build_table.size(), columns_to_join,
-                           probe_table.data(), probe_table.size(), columns_to_join,
-                           1, build_table.size() + probe_table.size() - 1, reference_result.data(),
-                           nullptr, nullptr, &ctxt),
-            GDF_SUCCESS, "gdf_inner_join"
+        reference = cudf::experimental::inner_join(
+            build->view(), probe->view(),
+            {0}, {0}, {std::pair<cudf::size_type, cudf::size_type>(0, 0)}
         );
-
     }
 
-    std::vector<gdf_column *> local_build_table = distribute_table(build_table, &communicator);
-    std::vector<gdf_column *> local_probe_table = distribute_table(probe_table, &communicator);
+    std::unique_ptr<table> local_build = distribute_table(build_view, &communicator);
+    std::unique_ptr<table> local_probe = distribute_table(probe_view, &communicator);
 
     /* Distributed join */
 
-    std::vector<gdf_column *> distributed_result;
-
-    distributed_join(
-        local_build_table, local_probe_table, distributed_result,
+    std::unique_ptr<table> join_result_all_ranks = distributed_inner_join(
+        local_build->view(), local_probe->view(),
+        {0}, {0}, {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
         &communicator, OVER_DECOMPOSITION_FACTOR
     );
 
-    if (mpi_rank == 0) {
-        free_table(build_table);
-        free_table(probe_table);
-    }
+    /* Send join result from all ranks to the root rank */
 
-    free_table(local_build_table);
-    free_table(local_probe_table);
+    std::unique_ptr<table> join_result = collect_tables(
+        join_result_all_ranks->view(), &communicator
+    );
 
-    std::vector<gdf_column *> received_table;
-
-    collect_tables(received_table, distributed_result, &communicator);
-    free_table(distributed_result);
+    /* Verify correctness */
 
     if (mpi_rank == 0) {
-        // hold the indices of sort result
-        gdf_column refernece_idx;
-        gdf_column received_idx;
+        // Although join_result and reference should contain the same table, rows may be reordered.
+        // Therefore, we first sort both tables and then compare
 
-        gdf_size_type size = reference_result[0]->size;
-        int ncols = reference_result.size();
+        cudf::size_type nrows = reference->num_rows();
+        assert(join_result->num_rows() == nrows);
 
-        assert(size == received_table[0]->size);
+        std::unique_ptr<table> join_sorted = cudf::experimental::sort(join_result->view());
+        std::unique_ptr<table> reference_sorted = cudf::experimental::sort(reference->view());
 
-        /* Allocate device memory for sort indices */
-
-        void *data;
-
-        CHECK_ERROR(RMM_ALLOC(&data, size * sizeof(int), 0), RMM_SUCCESS, "RMM_ALLOC");
-
-        CHECK_ERROR(
-            gdf_column_view(&refernece_idx, data, nullptr, size, GDF_INT32),
-            GDF_SUCCESS, "gdf_column_view"
-        );
-
-        CHECK_ERROR(RMM_ALLOC(&data, size * sizeof(int), 0), RMM_SUCCESS, "RMM_ALLOC");
-
-        CHECK_ERROR(
-            gdf_column_view(&received_idx, data, nullptr, size, GDF_INT32),
-            GDF_SUCCESS, "gdf_column_view"
-        );
-
-        /* Sort the reference table and reference table */
-
-        std::vector<int8_t> asc_desc(ncols, 0);
-        int8_t *asc_desc_dev;
-        CHECK_ERROR(RMM_ALLOC(&asc_desc_dev, ncols * sizeof(int8_t), 0), RMM_SUCCESS, "RMM_ALLOC");
-        CHECK_ERROR(
-            cudaMemcpy(asc_desc_dev, asc_desc.data(), ncols * sizeof(int8_t), cudaMemcpyHostToDevice),
-            cudaSuccess, "cudaMemcpy"
-        );
-
-        CHECK_ERROR(
-            gdf_order_by(reference_result.data(), asc_desc_dev, ncols, &refernece_idx, &ctxt),
-            GDF_SUCCESS, "gdf_order_by"
-        );
-
-        CHECK_ERROR(
-            gdf_order_by(received_table.data(), asc_desc_dev, ncols, &received_idx, &ctxt),
-            GDF_SUCCESS, "gdf_order_by"
-        );
-
-        /* Verify correctness */
+        // Get the number of thread blocks based on thread block size
 
         const int block_size = 128;
         int nblocks {-1};
 
-        CHECK_ERROR(
-            cudaOccupancyMaxActiveBlocksPerMultiprocessor(&nblocks, verify_correctness<int>, block_size, 0),
-            cudaSuccess, "cudaOccupancyMaxActiveBlocksPerMultiprocessor"
+        CUDA_RT_CALL(
+            cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+                &nblocks, verify_correctness<KEY_T>, block_size, 0
+            )
         );
 
-        for (int icol = 0; icol < ncols; icol++) {
-            verify_correctness<int><<<nblocks, block_size>>>(
-                (int *)reference_result[icol]->data,
-                (int *)refernece_idx.data,
-                (int *)received_table[icol]->data,
-                (int *)received_idx.data,
-                size
+        // There should be three columns in the result table. The first column is the joined key
+        // column. The second and third column comes from the payload column from the left and
+        // the right input table, respectively.
+
+        // Verify the first column (key column) is correct.
+
+        verify_correctness<KEY_T><<<nblocks, block_size>>>(
+            join_sorted->view().column(0).head<KEY_T>(),
+            reference_sorted->view().column(0).head<KEY_T>(),
+            nrows
+        );
+
+        // Verify the remaining two payload columns are correct.
+
+        for (cudf::size_type icol = 1; icol <= 2; icol++) {
+            verify_correctness<PAYLOAD_T><<<nblocks, block_size>>>(
+                join_sorted->view().column(icol).head<PAYLOAD_T>(),
+                reference_sorted->view().column(icol).head<PAYLOAD_T>(),
+                nrows
             );
         }
-
-        CHECK_ERROR(RMM_FREE(asc_desc_dev, 0), RMM_SUCCESS, "RMM_FREE");
-        CHECK_ERROR(gdf_column_free(&refernece_idx), GDF_SUCCESS, "gdf_column_free");
-        CHECK_ERROR(gdf_column_free(&received_idx), GDF_SUCCESS, "gdf_column_free");
-
     }
 
     /* Cleanup */
-
-    if (mpi_rank == 0) {
-        free_table(reference_result);
-        free_table(received_table);
-    }
 
     communicator.finalize();
 
