@@ -125,11 +125,11 @@ generate_build_probe_tables(cudf::size_type build_table_nrows,
 
 
 template <typename data_type>
-void add_constant_to_column(gdf_column *column, data_type constant)
+void add_constant_to_column(cudf::mutable_column_view column, data_type constant)
 {
-    auto buffer_ptr = thrust::device_pointer_cast(reinterpret_cast<data_type *>(column->data));
+    auto buffer_ptr = thrust::device_pointer_cast(column.head<data_type>());
 
-    thrust::for_each(buffer_ptr, buffer_ptr + column->size,
+    thrust::for_each(buffer_ptr, buffer_ptr + column.size(),
                      [=] __device__ (data_type &i) {
                         i += constant;
                      });
@@ -189,21 +189,19 @@ generate_tables_distributed(
     // Add constant to build and probe table to make sure the range is correct
 
     add_constant_to_column<KEY_T>(
-        pre_shuffle_build_table->view().column(0).head<KEY_T>(), rand_max_per_rank * mpi_rank
+        pre_shuffle_build_table->mutable_view().column(0), rand_max_per_rank * mpi_rank
     );
 
     add_constant_to_column<KEY_T>(
-        pre_shuffle_probe_table->view().column(0).head<KEY_T>(), rand_max_per_rank * mpi_rank
+        pre_shuffle_probe_table->mutable_view().column(0), rand_max_per_rank * mpi_rank
     );
 
     add_constant_to_column<PAYLOAD_T>(
-        pre_shuffle_build_table->view().column(1).head<PAYLOAD_T>(),
-        build_table_nrows_per_rank * mpi_rank
+        pre_shuffle_build_table->mutable_view().column(1), build_table_nrows_per_rank * mpi_rank
     );
 
     add_constant_to_column<PAYLOAD_T>(
-        pre_shuffle_probe_table->view().column(1).head<PAYLOAD_T>(),
-        probe_table_nrows_per_rank * mpi_rank
+        pre_shuffle_probe_table->mutable_view().column(1), probe_table_nrows_per_rank * mpi_rank
     );
 
     // Construct buffer offset to indicate the start indices to each rank

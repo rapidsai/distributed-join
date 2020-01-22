@@ -128,7 +128,7 @@ int main(int argc, char *argv[])
     auto join_result = distributed_inner_join(
         local_left_table->view(), local_right_table->view(),
         {0}, {0}, {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
-        &communicator
+        &communicator, OVER_DECOMPOSITION_FACTOR
     );
 
     /* Merge table from worker ranks to the root rank */

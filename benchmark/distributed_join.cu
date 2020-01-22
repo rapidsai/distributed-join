@@ -14,22 +14,25 @@
  * limitations under the License.
  */
 
-#include <cstdlib>
-#include <cstring>
+#include <iostream>
 #include <vector>
-#include <rmm/rmm.h>
-#include <mpi.h>
-#include <ucp/api/ucp.h>
-#include <cuda_profiler_api.h>
 #include <algorithm>
+#include <memory>
+#include <utility>
 
-#include "../src/cudf_helper.cuh"
-#include "../src/distributed.cuh"
+#include <mpi.h>
+#include <cuda_profiler_api.h>
+
+#include <cudf/table/table.hpp>
+#include <cudf/types.hpp>
+
+#include "../src/communicator.h"
 #include "../src/error.cuh"
-#include "../src/comm.cuh"
+#include "../src/generate_table.cuh"
+#include "../src/distributed_join.cuh"
 
-#define BUILD_TABLE_SIZE_EACH_RANK 100'000'000
-#define PROBE_TABLE_SIZE_EACH_RANK 100'000'000
+#define BUILD_TABLE_NROWS_EACH_RANK 100'000'000
+#define PROBE_TABLE_NROWS_EACH_RANK 100'000'000
 #define SELECTIVITY 0.3
 #define RAND_MAX_VAL 200'000'000
 #define IS_BUILD_TABLE_KEY_UNIQUE true
@@ -37,6 +40,8 @@
 
 #define KEY_T int64_t
 #define PAYLOAD_T int64_t
+
+using cudf::experimental::table;
 
 
 int main(int argc, char *argv[])
@@ -54,19 +59,16 @@ int main(int argc, char *argv[])
 
     /* Generate build table and probe table on each node */
 
-    std::vector<gdf_column *> local_build_table;
-    std::vector<gdf_column *> local_probe_table;
+    std::unique_ptr<table> left;
+    std::unique_ptr<table> right;
 
-    generate_tables_distributed<KEY_T, PAYLOAD_T>(
-        local_build_table, BUILD_TABLE_SIZE_EACH_RANK,
-        local_probe_table, PROBE_TABLE_SIZE_EACH_RANK,
+    std::tie(left, right) = generate_tables_distributed<KEY_T, PAYLOAD_T>(
+        BUILD_TABLE_NROWS_EACH_RANK, PROBE_TABLE_NROWS_EACH_RANK,
         SELECTIVITY, RAND_MAX_VAL, IS_BUILD_TABLE_KEY_UNIQUE,
         &communicator
     );
 
     /* Distributed join */
-
-    std::vector<gdf_column *> distributed_result;
 
     CUDA_RT_CALL(cudaDeviceSynchronize());
 
@@ -74,8 +76,9 @@ int main(int argc, char *argv[])
     cudaProfilerStart();
     double start = MPI_Wtime();
 
-    distributed_join(
-        local_build_table, local_probe_table, distributed_result,
+    std::unique_ptr<table> join_result = distributed_inner_join(
+        left->view(), right->view(),
+        {0}, {0}, {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
         &communicator, OVER_DECOMPOSITION_FACTOR
     );
 
@@ -88,10 +91,6 @@ int main(int argc, char *argv[])
     }
 
     /* Cleanup */
-
-    free_table(local_build_table);
-    free_table(local_probe_table);
-    free_table(distributed_result);
 
     communicator.finalize();
 
