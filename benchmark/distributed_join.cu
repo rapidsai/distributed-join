@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <memory>
 #include <utility>
+#include <tuple>
 
 #include <mpi.h>
 #include <cuda_profiler_api.h>

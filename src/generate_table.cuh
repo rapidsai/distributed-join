@@ -21,6 +21,7 @@
 #include <utility>
 #include <memory>
 #include <stdexcept>
+#include <tuple>
 
 #include <cudf/types.hpp>
 #include <cudf/table/table.hpp>

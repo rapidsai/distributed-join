@@ -21,6 +21,7 @@
 #include <vector>
 #include <memory>
 #include <thread>
+#include <tuple>
 #include <type_traits>
 
 #include <cudf/types.hpp>
@@ -283,30 +284,24 @@ distributed_inner_join(
 
     int mpi_size = communicator->mpi_size;
 
-    // @TODO: The returned partitions need to be handled differently once
-    // https://github.com/rapidsai/cudf/pull/3636 is merged.
-    auto tmp_left = cudf::hash_partition(left, left_on, mpi_size * over_decom_factor);
-    auto tmp_right = cudf::hash_partition(right, right_on, mpi_size * over_decom_factor);
+    /* Hash partition */
 
-    // @TODO: The follow section is not need once https://github.com/rapidsai/cudf/pull/3636 is
-    // merged.
-    // {{{
-    vector<cudf::size_type> left_offset {0};
-    vector<cudf::table_view> tables_to_concat;
-    for (auto &table_ptr : tmp_left) {
-        left_offset.push_back(left_offset.back() + table_ptr->num_rows());
-        tables_to_concat.push_back(table_ptr->view());
-    }
-    std::unique_ptr<table> hashed_left = cudf::experimental::concatenate(tables_to_concat);
+    std::unique_ptr<table> hashed_left;
+    vector<cudf::size_type> left_offset;
 
-    vector<cudf::size_type> right_offset {0};
-    tables_to_concat.clear();
-    for (auto &table_ptr : tmp_right) {
-        right_offset.push_back(right_offset.back() + table_ptr->num_rows());
-        tables_to_concat.push_back(table_ptr->view());
-    }
-    std::unique_ptr<table> hashed_right = cudf::experimental::concatenate(tables_to_concat);
-    // }}}
+    std::unique_ptr<table> hashed_right;
+    vector<cudf::size_type> right_offset;
+
+    std::tie(hashed_left, left_offset) = cudf::hash_partition(
+        left, left_on, mpi_size * over_decom_factor
+    );
+
+    std::tie(hashed_right, right_offset) = cudf::hash_partition(
+        right, right_on, mpi_size * over_decom_factor
+    );
+
+    left_offset.push_back(left.num_rows());
+    right_offset.push_back(right.num_rows());
 
     /* Get column data types */
 

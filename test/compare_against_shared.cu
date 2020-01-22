@@ -18,6 +18,7 @@
 #include <vector>
 #include <memory>
 #include <utility>
+#include <tuple>
 
 #include <cudf/table/table.hpp>
 #include <cudf/join.hpp>
