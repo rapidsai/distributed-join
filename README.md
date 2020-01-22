@@ -6,10 +6,11 @@ This project depends on CUDA, UCX, MPI and cuDF.
 
 The Makefile uses `pkg-config` to determine the installation path of UCX, so make sure `ucx.pc` is in `PKG_CONFIG_PATH`.
 
-To query the size of cuDF dtype, this project uses `gdf_dtype_size`, which is removed in cuDF upstream recently. For now, you could use [my custom branch](https://github.com/gaohao95/cudf/tree/improve-join-perf-with-size), which brings `gdf_dtype_size` back. In the long term, the dtype size should be queried using [Jake's column redesign](https://github.com/rapidsai/cudf/pull/2207).
+Modify the variable `CUDA_HOME`, `CUDF_HOME`, `CUB_HOME`, `MPI_HOME` in *Makefile* to the installation path of CUDA, cuDF, CUB and MPI, repectively.
 
-To compile, modify the variable `CUDA_HOME`, `CUDF_HOME`, `MPI_HOME` in *Makefile* to the installation path of CUDA, cuDF and MPI, repectively, and then run
+The variable `THIRD_PARTY_HOME` should point to [this repo](https://github.com/rapidsai/thirdparty-freestanding).
 
+To compile, run
 ```bash
 make -j
 ```
@@ -40,13 +41,13 @@ srun --time=0:30:00 --nodes=4 --ntasks-per-node=8 benchmark/run.py
 
 ```
 benchmark/
-    all_to_all.cu               Benchmark the throughput of all-to-all communications
-    distributed_join.cu         Benchmark the throughput of distributed-join
+    all_to_all.cu               Benchmark the throughput of all-to-all communications.
+    distributed_join.cu         Benchmark the throughput of distributed join.
 src/
     comm.cuh                    Communication related helper functions.
     communicator.cpp            Different implementations for the common send/recv interface definced in the header file.
-    cudf_helper.cuh             cuDF related helper functions.
-    distributed.cuh             Distributed algorithms. E.g. distributed table generations, distributed join, all-to-all communication etc.
+    distributed_join.cuh        Distributed join and all-to-all communication implementation.
+    distribute_table.cuh        Table distribution/collection between the root rank and all worker ranks.
     error.cuh                   Error checking macros.
 test/
     buffer_communicator.cu      Test the correctness of the buffer communicator.
