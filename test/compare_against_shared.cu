@@ -31,15 +31,15 @@
 #include "../src/distribute_table.cuh"
 #include "../src/distributed_join.cuh"
 
-#define BUILD_TABLE_SIZE 1'000'000
-#define PROBE_TABLE_SIZE 5'000'000
-#define SELECTIVITY 0.3
-#define RAND_MAX_VAL 2'000'000
-#define IS_BUILD_TABLE_KEY_UNIQUE true
-#define OVER_DECOMPOSITION_FACTOR 10
-
 #define KEY_T int
 #define PAYLOAD_T int
+
+static constexpr cudf::size_type BUILD_TABLE_SIZE = 1'000'000;
+static constexpr cudf::size_type PROBE_TABLE_SIZE = 5'000'000;
+static constexpr double SELECTIVITY = 0.3;
+static constexpr KEY_T RAND_MAX_VAL = 2'000'000;
+static constexpr bool IS_BUILD_TABLE_KEY_UNIQUE = true;
+static constexpr int OVER_DECOMPOSITION_FACTOR = 10;
 
 using cudf::experimental::table;
 

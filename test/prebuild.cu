@@ -34,8 +34,8 @@
 
 using cudf::experimental::table;
 
-#define SIZE 30000
-#define OVER_DECOMPOSITION_FACTOR 1
+static constexpr cudf::size_type SIZE = 30000;
+static constexpr int OVER_DECOMPOSITION_FACTOR = 1;
 
 
 __global__ void fill_buffer(int *buffer, int multiple)

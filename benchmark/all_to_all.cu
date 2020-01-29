@@ -19,14 +19,14 @@
 #include <mpi.h>
 #include <iostream>
 #include <cuda_profiler_api.h>
+#include <cstdint>
 
 #include "../src/communicator.h"
 #include "../src/error.cuh"
 
-#define SIZE 800'000'000LL
-#define BUFFER_SIZE 25'000'000LL
-#define REPEAT 4
-
+static constexpr int64_t SIZE = 800'000'000LL;
+static constexpr int64_t BUFFER_SIZE = 25'000'000LL;
+static constexpr int REPEAT = 4;
 
 int main(int argc, char *argv[])
 {

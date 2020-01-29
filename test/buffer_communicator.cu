@@ -21,7 +21,7 @@
 #include "../src/communicator.h"
 #include "../src/error.cuh"
 
-#define COUNT 50'000'000LL
+static constexpr int64_t COUNT = 50'000'000LL;
 
 
 __global__ void set_data(uint64_t *start_addr, uint64_t size, uint64_t start_val)

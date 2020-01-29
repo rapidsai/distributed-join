@@ -20,6 +20,7 @@
 #include <memory>
 #include <utility>
 #include <tuple>
+#include <cstdint>
 
 #include <mpi.h>
 #include <cuda_profiler_api.h>
@@ -32,15 +33,15 @@
 #include "../src/generate_table.cuh"
 #include "../src/distributed_join.cuh"
 
-#define BUILD_TABLE_NROWS_EACH_RANK 100'000'000
-#define PROBE_TABLE_NROWS_EACH_RANK 100'000'000
-#define SELECTIVITY 0.3
-#define RAND_MAX_VAL 200'000'000
-#define IS_BUILD_TABLE_KEY_UNIQUE true
-#define OVER_DECOMPOSITION_FACTOR 1
-
 #define KEY_T int64_t
 #define PAYLOAD_T int64_t
+
+static constexpr cudf::size_type BUILD_TABLE_NROWS_EACH_RANK = 100'000'000;
+static constexpr cudf::size_type PROBE_TABLE_NROWS_EACH_RANK = 100'000'000;
+static constexpr double SELECTIVITY = 0.3;
+static constexpr KEY_T RAND_MAX_VAL = 200'000'000;
+static constexpr bool IS_BUILD_TABLE_KEY_UNIQUE = true;
+static constexpr int OVER_DECOMPOSITION_FACTOR = 1;
 
 using cudf::experimental::table;
 
