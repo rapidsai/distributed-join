@@ -27,29 +27,15 @@
 #include <cudf/table/table.hpp>
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_factories.hpp>
+#include <cudf/utilities/type_dispatcher.hpp>
+#include <thrust/sequence.h>
+#include <thrust/execution_policy.h>
 
 #include "error.cuh"
 #include "../generate_dataset/generate_dataset.cuh"
 #include "distributed_join.cuh"
 
 using cudf::experimental::table;
-
-
-template <typename col_type>
-cudf::data_type gdf_dtype_from_col_type()
-{
-    if(std::is_same<col_type,int8_t>::value) return cudf::data_type(cudf::INT8);
-    else if(std::is_same<col_type,uint8_t>::value) return cudf::data_type(cudf::INT8);
-    else if(std::is_same<col_type,int16_t>::value) return cudf::data_type(cudf::INT16);
-    else if(std::is_same<col_type,uint16_t>::value) return cudf::data_type(cudf::INT16);
-    else if(std::is_same<col_type,int32_t>::value) return cudf::data_type(cudf::INT32);
-    else if(std::is_same<col_type,uint32_t>::value) return cudf::data_type(cudf::INT32);
-    else if(std::is_same<col_type,int64_t>::value) return cudf::data_type(cudf::INT64);
-    else if(std::is_same<col_type,uint64_t>::value) return cudf::data_type(cudf::INT64);
-    else if(std::is_same<col_type,float>::value) return cudf::data_type(cudf::FLOAT32);
-    else if(std::is_same<col_type,double>::value) return cudf::data_type(cudf::FLOAT64);
-    else throw std::runtime_error("Unknown data type for cuDF");
-}
 
 
 /**
@@ -81,20 +67,28 @@ generate_build_probe_tables(cudf::size_type build_table_nrows,
     std::vector<std::unique_ptr<cudf::column> > build;
     std::vector<std::unique_ptr<cudf::column> > probe;
 
+    constexpr cudf::data_type key_type = cudf::data_type(
+        cudf::experimental::type_to_id<KEY_T>()
+    );
+
+    constexpr cudf::data_type payload_type = cudf::data_type(
+        cudf::experimental::type_to_id<PAYLOAD_T>()
+    );
+
     build.push_back(std::move(
-        cudf::make_numeric_column(gdf_dtype_from_col_type<KEY_T>(), build_table_nrows)
+        cudf::make_numeric_column(key_type, build_table_nrows)
     ));
 
     build.push_back(std::move(
-        cudf::make_numeric_column(gdf_dtype_from_col_type<PAYLOAD_T>(), build_table_nrows)
+        cudf::make_numeric_column(payload_type, build_table_nrows)
     ));
 
     probe.push_back(std::move(
-        cudf::make_numeric_column(gdf_dtype_from_col_type<KEY_T>(), probe_table_nrows)
+        cudf::make_numeric_column(key_type, probe_table_nrows)
     ));
 
     probe.push_back(std::move(
-        cudf::make_numeric_column(gdf_dtype_from_col_type<PAYLOAD_T>(), probe_table_nrows)
+        cudf::make_numeric_column(payload_type, probe_table_nrows)
     ));
 
     // Generate build and probe table data
@@ -105,13 +99,11 @@ generate_build_probe_tables(cudf::size_type build_table_nrows,
         selectivity, rand_max, uniq_build_tbl_keys
     );
 
-    linear_sequence<PAYLOAD_T, cudf::size_type><<<(build_table_nrows+127)/128,128>>>(
-        build[1]->mutable_view().head<PAYLOAD_T>(), build_table_nrows
-    );
+    auto build_payload_ptr = build[1]->mutable_view().head<PAYLOAD_T>();
+    thrust::sequence(thrust::device, build_payload_ptr, build_payload_ptr + build_table_nrows);
 
-    linear_sequence<PAYLOAD_T, cudf::size_type><<<(probe_table_nrows+127)/128,128>>>(
-        probe[1]->mutable_view().head<PAYLOAD_T>(), probe_table_nrows
-    );
+    auto probe_payload_ptr = probe[1]->mutable_view().head<PAYLOAD_T>();
+    thrust::sequence(thrust::device, probe_payload_ptr, probe_payload_ptr + probe_table_nrows);
 
     CUDA_RT_CALL(cudaGetLastError());
     CUDA_RT_CALL(cudaDeviceSynchronize());
@@ -130,10 +122,10 @@ void add_constant_to_column(cudf::mutable_column_view column, data_type constant
 {
     auto buffer_ptr = thrust::device_pointer_cast(column.head<data_type>());
 
-    thrust::for_each(buffer_ptr, buffer_ptr + column.size(),
-                     [=] __device__ (data_type &i) {
-                        i += constant;
-                     });
+    thrust::transform(buffer_ptr, buffer_ptr + column.size(), buffer_ptr,
+                      [=] __device__ (data_type &i) {
+                          return i + constant;
+                      });
 }
 
 

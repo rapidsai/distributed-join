@@ -26,6 +26,8 @@
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
 #include <cudf/join.hpp>
+#include <thrust/sequence.h>
+#include <thrust/execution_policy.h>
 
 #include "../src/communicator.h"
 #include "../src/error.cuh"
@@ -68,22 +70,16 @@ generate_table(int multiple)
 {
     std::vector<std::unique_ptr<cudf::column> > new_table;
 
-    // compute the number of thread blocks and thread block size for fill_buffer kernel
-    const int block_size {128};
-    int nblocks {-1};
-
-    CUDA_RT_CALL(
-        cudaOccupancyMaxActiveBlocksPerMultiprocessor(&nblocks, fill_buffer, block_size, 0)
-    );
-
     // construct the key column
     auto key_column = cudf::make_numeric_column(cudf::data_type(cudf::INT32), SIZE);
-    fill_buffer<<<nblocks, block_size>>>(key_column->mutable_view().head<int>(), multiple);
+    auto key_buffer = key_column->mutable_view().head<int>();
+    thrust::sequence(thrust::device, key_buffer, key_buffer + SIZE, 0, multiple);
     new_table.push_back(std::move(key_column));
 
     // construct the payload column
     auto payload_column = cudf::make_numeric_column(cudf::data_type(cudf::INT32), SIZE);
-    fill_buffer<<<nblocks, block_size>>>(payload_column->mutable_view().head<int>(), 1);
+    auto payload_buffer = payload_column->mutable_view().head<int>();
+    thrust::sequence(thrust::device, payload_buffer, payload_buffer + SIZE);
     new_table.push_back(std::move(payload_column));
 
     return std::make_unique<table>(std::move(new_table));

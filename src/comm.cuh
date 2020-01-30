@@ -167,7 +167,7 @@ recv_data_by_offset(
  */
 rmm::device_buffer
 merge_free_received_offset(
-    std::vector<void *> received_data,
+    std::vector<void *> &received_data,
     const std::vector<int64_t> &bucket_count,
     size_t item_size,
     int64_t &total_count,
