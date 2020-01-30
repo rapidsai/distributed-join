@@ -1,13 +1,9 @@
-CC=nvcc
-
-CUDA_HOME=/gpfs/sw/software/CUDA/10.1.105
-CUDF_HOME=/gpfs/fs1/haog/miniconda3/envs/cudf
-MPI_HOME=/gpfs/sw/software/OpenMPI/3.1.3-GCC-7.3.0-2.30-CUDA-10.1.105
+CC=${CUDA_HOME}/bin/nvcc
 
 CUDF_CFLAGS=-I${CUDF_HOME}/include
 CUDF_LIBS=-L${CUDF_HOME}/lib -lcudf -lrmm
 MPI_CFLAGS=-I${MPI_HOME}/include
-MPI_LIBS=-L${MPI_HOME}/lib -lmpi -lmpi_cxx
+MPI_LIBS=-L${MPI_HOME}/lib -lmpi
 UCX_CFLAGS=`pkg-config --cflags ucx`
 UCX_LIBS=`pkg-config --libs ucx`
 CUDA_CFLAGS=-I${CUDA_HOME}/include -arch=sm_70 --expt-extended-lambda --default-stream per-thread
