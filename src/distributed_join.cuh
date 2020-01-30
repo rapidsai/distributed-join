@@ -65,7 +65,7 @@ using cudf::experimental::table;
 void
 all_to_all_comm(
     cudf::table_view hashed,
-    vector<cudf::size_type> offset,
+    vector<cudf::size_type> const& offset,
     vector<vector<void *> > &local_buckets,  // [icol, ibucket]
     vector<vector<int64_t> > &bucket_count,  // [icol, ibucket]
     Communicator *communicator)
@@ -117,9 +117,9 @@ all_to_all_comm(
  */
 std::unique_ptr<table>
 all_to_all_merge_data(
-    vector<vector<void *> > &buckets,
-    vector<vector<int64_t> > &counts,
-    vector<cudf::data_type> &dtypes,
+    vector<vector<void *> > const& buckets,
+    vector<vector<int64_t> > const& counts,
+    vector<cudf::data_type> const& dtypes,
     Communicator *communicator)
 {
     vector<std::unique_ptr<column> > merged_table;
@@ -155,7 +155,7 @@ all_to_all_merge_data(
 std::unique_ptr<table>
 all_to_all_comm_single_batch(
     cudf::table_view input,
-    vector<cudf::size_type> offset,
+    vector<cudf::size_type> const& offset,
     Communicator *communicator)
 {
     vector<std::unique_ptr<column> > recv_columns;
@@ -194,17 +194,17 @@ all_to_all_comm_single_batch(
 
 void
 inner_join_func(
-    vector<vector<vector<void *> > > &left_buckets,
-    vector<vector<vector<int64_t> > > &left_counts,
-    vector<cudf::data_type> &left_dtypes,
-    vector<vector<vector<void *> > > &right_buckets,
-    vector<vector<vector<int64_t> > > &right_counts,
-    vector<cudf::data_type> &right_dtypes,
+    vector<vector<vector<void *> > > const& left_buckets,
+    vector<vector<vector<int64_t> > > const& left_counts,
+    vector<cudf::data_type> const& left_dtypes,
+    vector<vector<vector<void *> > > const& right_buckets,
+    vector<vector<vector<int64_t> > > const& right_counts,
+    vector<cudf::data_type> const& right_dtypes,
     vector<std::unique_ptr<table> > &batch_join_results,
     vector<cudf::size_type> const& left_on,
     vector<cudf::size_type> const& right_on,
     vector<std::pair<cudf::size_type, cudf::size_type>> const& columns_in_common,
-    vector<bool> &flags,
+    vector<bool> const& flags,
     Communicator *communicator)
 {
     CUDA_RT_CALL(cudaSetDevice(communicator->current_device));

@@ -78,7 +78,7 @@ MPI_Datatype mpi_dtype_from_c_type()
 std::vector<comm_handle_t>
 send_data_by_offset(
     const void *data,
-    std::vector<int> offset,
+    std::vector<int> const& offset,
     size_t item_size,
     Communicator *communicator,
     bool self_send=true)
@@ -167,8 +167,8 @@ recv_data_by_offset(
  */
 rmm::device_buffer
 merge_free_received_offset(
-    std::vector<void *> &received_data,
-    const std::vector<int64_t> &bucket_count,
+    std::vector<void *> const& received_data,
+    std::vector<int64_t> const& bucket_count,
     size_t item_size,
     int64_t &total_count,
     Communicator *communicator=nullptr,

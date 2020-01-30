@@ -58,9 +58,9 @@ template<typename KEY_T, typename PAYLOAD_T>
 std::pair<std::unique_ptr<table>, std::unique_ptr<table> >
 generate_build_probe_tables(cudf::size_type build_table_nrows,
                             cudf::size_type probe_table_nrows,
-                            const double selectivity,
-                            const KEY_T rand_max,
-                            const bool uniq_build_tbl_keys)
+                            double selectivity,
+                            KEY_T rand_max,
+                            bool uniq_build_tbl_keys)
 {
     // Allocate device memory for the generated columns
 
@@ -150,9 +150,9 @@ std::pair<std::unique_ptr<table>, std::unique_ptr<table> >
 generate_tables_distributed(
     cudf::size_type build_table_nrows_per_rank,
     cudf::size_type probe_table_nrows_per_rank,
-    const double selectivity,
-    const KEY_T rand_max_per_rank,
-    const bool uniq_build_tbl_keys,
+    double selectivity,
+    KEY_T rand_max_per_rank,
+    bool uniq_build_tbl_keys,
     Communicator *communicator)
 {
     // Algorithm used for distributed generation:
