@@ -1,10 +1,4 @@
-CC=nvcc
-
-CUDA_HOME=/cm/extra/apps/CUDA.linux86-64/10.1.150_418.39
-CUDF_HOME=/home/hgao/miniconda3/envs/cudf
-THIRD_PARTY_HOME=/home/hgao/thirdparty-freestanding
-CUB_HOME=/home/hgao/cudf/thirdparty/cub
-MPI_HOME=/home/hgao/openmpi_install
+CC=${CUDA_HOME}/bin/nvcc
 
 CUDF_CFLAGS=-I${CUDF_HOME}/include -I${THIRD_PARTY_HOME}/include -I${CUB_HOME}
 CUDF_LIBS=-L${CUDF_HOME}/lib -lcudf -lrmm
