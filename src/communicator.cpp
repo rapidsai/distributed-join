@@ -62,16 +62,11 @@ void UCXCommunicator::create_endpoints()
 {
     /* Broadcast worker addresses to all nodes */
 
-    std::vector<ucp_address_t *> ucp_worker_address_book(mpi_size);
-    for (auto & iaddress: ucp_worker_address_book) {
-        iaddress = (ucp_address_t *)malloc(ucp_worker_address_len);
-    }
-
-    memcpy(ucp_worker_address_book[mpi_rank], ucp_worker_address, ucp_worker_address_len);
-
-    for (int iroot = 0; iroot < mpi_size; iroot++) {
-        MPI_CALL(MPI_Bcast(ucp_worker_address_book[iroot], ucp_worker_address_len, MPI_CHAR, iroot, MPI_COMM_WORLD));
-    }
+    void *ucp_worker_address_book = malloc(ucp_worker_address_len * mpi_size);
+    MPI_CALL(MPI_Allgather(
+        ucp_worker_address, ucp_worker_address_len, MPI_CHAR,
+        ucp_worker_address_book, ucp_worker_address_len, MPI_CHAR, MPI_COMM_WORLD
+    ));
 
     /* Create endpoints of all nodes */
 
@@ -83,14 +78,14 @@ void UCXCommunicator::create_endpoints()
     for (int irank = 0; irank < mpi_size; irank++) {
         memset(&ucp_ep_params[irank], 0, sizeof(ucp_ep_params));
         ucp_ep_params[irank].field_mask = UCP_EP_PARAM_FIELD_REMOTE_ADDRESS;
-        ucp_ep_params[irank].address = ucp_worker_address_book[irank];
+        ucp_ep_params[irank].address = (ucp_address_t *)(
+            (char *)ucp_worker_address_book + irank * ucp_worker_address_len
+        );
 
         UCX_CALL(ucp_ep_create(ucp_worker, &ucp_ep_params[irank], &ucp_endpoints[irank]));
     }
 
-    for (auto & iaddress : ucp_worker_address_book) {
-        free(iaddress);
-    }
+    free(ucp_worker_address_book);
 }
 
 
