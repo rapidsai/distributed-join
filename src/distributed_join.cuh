@@ -23,6 +23,8 @@
 #include <thread>
 #include <tuple>
 #include <type_traits>
+#include <chrono>
+#include <iostream>
 
 #include <cudf/types.hpp>
 #include <cudf/column/column.hpp>
@@ -39,6 +41,9 @@
 using std::vector;
 using cudf::column;
 using cudf::experimental::table;
+using std::chrono::high_resolution_clock;
+using std::chrono::duration_cast;
+using std::chrono::milliseconds;
 
 /**
  * All-to-all communication of a single batch without merging.
@@ -205,13 +210,21 @@ inner_join_func(
     vector<cudf::size_type> const& right_on,
     vector<std::pair<cudf::size_type, cudf::size_type>> const& columns_in_common,
     vector<bool> const& flags,
-    Communicator *communicator)
+    Communicator *communicator,
+    bool report_timing)
 {
     CUDA_RT_CALL(cudaSetDevice(communicator->current_device));
+
+    std::chrono::time_point<high_resolution_clock> start_time;
+    std::chrono::time_point<high_resolution_clock> stop_time;
 
     for (int ibatch = 0; ibatch < flags.size(); ibatch++) {
         // busy waiting for all-to-all communication of ibatch to finish
         while (!flags[ibatch]) {;}
+
+        if (report_timing) {
+            start_time = high_resolution_clock::now();
+        }
 
         std::unique_ptr<table> local_left = all_to_all_merge_data(
             left_buckets[ibatch], left_counts[ibatch], left_dtypes, communicator
@@ -230,6 +243,13 @@ inner_join_func(
             );
         } else {
             batch_join_results[ibatch] = std::make_unique<table>();
+        }
+
+        if (report_timing) {
+            stop_time = high_resolution_clock::now();
+            auto duration = duration_cast<milliseconds>(stop_time - start_time);
+            std::cerr << "Rank " << communicator->mpi_rank << ": Local join on batch " << ibatch
+                      << " takes " << duration.count() << "ms" << std::endl;
         }
     }
 }
@@ -261,7 +281,9 @@ inner_join_func(
  * an output column will be produced.  For each of these pairs (L, R), L
  * should exist in `left_on` and R should exist in `right_on`.
  * @param[in] communicator An instance of `Communicator` used for communication.
- * @param[in] over_decom_factor Over-decomposition factor.
+ * @param[in] over_decom_factor Over-decomposition factor used for overlapping computation and
+ * communication.
+ * @param[in] report_timing Whether collect and print timing.
  * @return Result of joining `left` and `right` tables on the columns
  * specified by `left_on` and `right_on`. The resulting table will be joined columns of
  * `left(including common columns)+right(excluding common columns)`. The join result is the
@@ -275,7 +297,8 @@ distributed_inner_join(
     vector<cudf::size_type> const& right_on,
     vector<std::pair<cudf::size_type, cudf::size_type>> const& columns_in_common,
     Communicator *communicator,
-    int over_decom_factor=1)
+    int over_decom_factor=1,
+    bool report_timing=false)
 {
     if (over_decom_factor == 1) {
         // @TODO: If over_decom_factor is 1, there is no opportunity for overlapping. Therefore,
@@ -283,8 +306,14 @@ distributed_inner_join(
     }
 
     int mpi_size = communicator->mpi_size;
+    std::chrono::time_point<high_resolution_clock> start_time;
+    std::chrono::time_point<high_resolution_clock> stop_time;
 
     /* Hash partition */
+
+    if (report_timing) {
+        start_time = high_resolution_clock::now();
+    }
 
     std::unique_ptr<table> hashed_left;
     vector<cudf::size_type> left_offset;
@@ -302,6 +331,13 @@ distributed_inner_join(
 
     left_offset.push_back(left.num_rows());
     right_offset.push_back(right.num_rows());
+
+    if (report_timing) {
+        stop_time = high_resolution_clock::now();
+        auto duration = duration_cast<milliseconds>(stop_time - start_time);
+        std::cerr << "Rank " << communicator->mpi_rank << ": Hash partition takes "
+                  << duration.count() << "ms" << std::endl;
+    }
 
     /* Get column data types */
 
@@ -335,12 +371,16 @@ distributed_inner_join(
         std::ref(left_buckets), std::ref(left_counts), std::ref(left_dtypes),
         std::ref(right_buckets), std::ref(right_counts), std::ref(right_dtypes),
         std::ref(batch_join_results), left_on, right_on, columns_in_common,
-        std::ref(flags), communicator
+        std::ref(flags), communicator, report_timing
     );
 
     /* Use the current thread for all-to-all communication */
 
     for (int ibatch = 0; ibatch < over_decom_factor; ibatch ++) {
+
+        if (report_timing) {
+            start_time = high_resolution_clock::now();
+        }
 
         // the start and end index for left_offset and right_offset for the ibatch
         size_t start_idx = ibatch * mpi_size;
@@ -362,6 +402,13 @@ distributed_inner_join(
         // mark the communication of ibatch as finished.
         // the join thread is safe to start performing local join on ibatch
         flags[ibatch] = true;
+
+        if (report_timing) {
+            stop_time = high_resolution_clock::now();
+            auto duration = duration_cast<milliseconds>(stop_time - start_time);
+            std::cerr << "Rank " << communicator->mpi_rank << ": All-to-all communication on batch "
+                      << ibatch << " takes " << duration.count() << "ms" << std::endl;
+        }
     }
 
     // wait for all join batches to finish
