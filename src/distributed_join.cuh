@@ -33,6 +33,8 @@
 #include <cudf/hashing.hpp>
 #include <cudf/join.hpp>
 #include <rmm/device_buffer.hpp>
+#include <rmm/mr/device/device_memory_resource.hpp>
+#include <rmm/mr/device/default_memory_resource.hpp>
 
 #include "error.cuh"
 #include "communicator.h"
@@ -211,7 +213,8 @@ inner_join_func(
     vector<std::pair<cudf::size_type, cudf::size_type>> const& columns_in_common,
     vector<bool> const& flags,
     Communicator *communicator,
-    bool report_timing)
+    bool report_timing, 
+    rmm::mr::device_memory_resource* mr)
 {
     CUDA_RT_CALL(cudaSetDevice(communicator->current_device));
 
@@ -371,7 +374,7 @@ distributed_inner_join(
         std::ref(left_buckets), std::ref(left_counts), std::ref(left_dtypes),
         std::ref(right_buckets), std::ref(right_counts), std::ref(right_dtypes),
         std::ref(batch_join_results), left_on, right_on, columns_in_common,
-        std::ref(flags), communicator, report_timing
+        std::ref(flags), communicator, report_timing, rmm::mr::get_default_resource()
     );
 
     /* Use the current thread for all-to-all communication */

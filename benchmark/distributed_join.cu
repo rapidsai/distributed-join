@@ -56,7 +56,7 @@ int main(int argc, char *argv[])
     int mpi_rank {communicator.mpi_rank};
     int mpi_size {communicator.mpi_size};
 
-    communicator.setup_cache(2 * mpi_size, std::max(250'000LL, 800'000'000LL / mpi_size / 50));
+    communicator.setup_cache(2 * mpi_size, 800'000'000LL / mpi_size - 100'000LL);
     communicator.warmup_cache();
 
     /* Generate build table and probe table on each node */
