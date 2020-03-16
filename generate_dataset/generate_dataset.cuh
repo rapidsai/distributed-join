@@ -24,7 +24,6 @@
 #include <thrust/distance.h>
 #include <cassert>
 
-#include <cudf/cudf.h>
 #include <rmm/rmm.h>
 #include <rmm/thrust_rmm_allocator.h>
 
@@ -262,14 +261,6 @@ void generate_input_tables(
     RMM_CALL(RMM_FREE(lottery, 0));
     RMM_CALL(RMM_FREE(build_tbl_sorted, 0));
     RMM_CALL(RMM_FREE(devStates, 0));
-}
-
-
-template<typename key_type, typename size_type>
-__global__ void linear_sequence(key_type* tbl, const size_type size)
-{
-  for (size_type i = threadIdx.x + blockDim.x * blockIdx.x; i < size; i += blockDim.x * gridDim.x)
-    tbl[i] = i;
 }
 
 

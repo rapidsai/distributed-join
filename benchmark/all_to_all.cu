@@ -19,14 +19,14 @@
 #include <mpi.h>
 #include <iostream>
 #include <cuda_profiler_api.h>
+#include <cstdint>
 
 #include "../src/communicator.h"
 #include "../src/error.cuh"
 
-#define SIZE 800'000'000LL
-#define BUFFER_SIZE 25'000'000LL
-#define REPEAT 4
-
+static constexpr int64_t SIZE = 800'000'000LL;
+static constexpr int64_t BUFFER_SIZE = 25'000'000LL;
+static constexpr int REPEAT = 4;
 
 int main(int argc, char *argv[])
 {
@@ -87,7 +87,7 @@ int main(int argc, char *argv[])
     MPI_Barrier(MPI_COMM_WORLD);
     if (mpi_rank == 0) {
         std::cerr << "Elasped time (s) " << stop - start << std::endl;
-        std::cerr << "Bandwidth (GB/s) " << (double)SIZE * (mpi_size - 5) * REPEAT / (stop - start) / 1e9 << std::endl;
+        std::cerr << "Bandwidth (GB/s) " << (double)SIZE * (mpi_size - 1) * REPEAT / (stop - start) / 1e9 << std::endl;
     }
 
     /* Cleanup */
