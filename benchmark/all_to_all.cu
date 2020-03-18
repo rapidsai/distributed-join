@@ -27,6 +27,7 @@
 static constexpr int64_t SIZE = 800'000'000LL;
 static constexpr int64_t BUFFER_SIZE = 25'000'000LL;
 static constexpr int REPEAT = 4;
+static constexpr bool WARM_UP = false;
 
 int main(int argc, char *argv[])
 {
@@ -38,6 +39,49 @@ int main(int argc, char *argv[])
 
     communicator.setup_cache(2 * mpi_size, BUFFER_SIZE);
     communicator.warmup_cache();
+
+    /* Warmup if necessary */
+
+    if (WARM_UP) {
+        const int64_t WARMUP_BUFFER_SIZE = 1'000'000LL;
+        std::vector<void *> warmup_send_buffer(mpi_size, nullptr);
+        std::vector<void *> warmup_recv_buffer(mpi_size, nullptr);
+
+        for (int irank = 0; irank < mpi_size; irank ++) {
+            RMM_CALL(RMM_ALLOC(&warmup_send_buffer[irank], WARMUP_BUFFER_SIZE, 0));
+        }
+
+        std::vector<comm_handle_t> warmup_send_reqs(mpi_size, nullptr);
+        std::vector<comm_handle_t> warmup_recv_reqs(mpi_size, nullptr);
+
+        for (int irank = 0; irank < mpi_size; irank++) {
+            if (irank != mpi_rank) {
+                warmup_send_reqs[irank] = communicator.send(
+                    warmup_send_buffer[irank], WARMUP_BUFFER_SIZE, 1, irank, 10
+                );
+            } else {
+                warmup_send_reqs[irank] = nullptr;
+            }
+        }
+
+        for (int irank = 0; irank < mpi_size; irank++) {
+            if (irank != mpi_rank) {
+                warmup_recv_reqs[irank] = communicator.recv(
+                    &warmup_recv_buffer[irank], nullptr, 1, irank, 10
+                );
+            } else {
+                warmup_recv_reqs[irank] = nullptr;
+            }
+        }
+
+        communicator.waitall(warmup_send_reqs);
+        communicator.waitall(warmup_recv_reqs);
+
+        for (int irank = 0; irank < mpi_rank; irank ++) {
+            RMM_CALL(RMM_FREE(warmup_send_buffer[irank], 0));
+            RMM_CALL(RMM_FREE(warmup_recv_buffer[irank], 0));
+        }
+    }
 
     /* Allocate data buffers */
 
