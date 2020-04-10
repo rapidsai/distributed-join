@@ -28,9 +28,10 @@
 
 #include <cudf/types.hpp>
 #include <cudf/column/column.hpp>
+#include <cudf/concatenate.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
-#include <cudf/hashing.hpp>
+#include <cudf/detail/hashing.hpp>
 #include <cudf/join.hpp>
 #include <rmm/device_buffer.hpp>
 #include <rmm/mr/device/device_memory_resource.hpp>
@@ -324,11 +325,11 @@ distributed_inner_join(
     std::unique_ptr<table> hashed_right;
     vector<cudf::size_type> right_offset;
 
-    std::tie(hashed_left, left_offset) = cudf::hash_partition(
+    std::tie(hashed_left, left_offset) = cudf::detail::hash_partition(
         left, left_on, mpi_size * over_decom_factor
     );
 
-    std::tie(hashed_right, right_offset) = cudf::hash_partition(
+    std::tie(hashed_right, right_offset) = cudf::detail::hash_partition(
         right, right_on, mpi_size * over_decom_factor
     );
 
