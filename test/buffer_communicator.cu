@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <vector>
 #include <iostream>
+#include <cassert>
 
 #include "../src/communicator.h"
 #include "../src/error.cuh"

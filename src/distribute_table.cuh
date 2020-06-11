@@ -134,7 +134,7 @@ distribute_cols(
  *
  * @returns                    The local table on each rank.
  */
-std::unique_ptr<cudf::experimental::table>
+std::unique_ptr<cudf::table>
 distribute_table(
     cudf::table_view global_table,
     Communicator *communicator)
@@ -199,7 +199,7 @@ distribute_table(
         distribute_cols(global_col, local_table[icol]->mutable_view(), communicator);
     }
 
-    return std::make_unique<cudf::experimental::table>(std::move(local_table));
+    return std::make_unique<cudf::table>(std::move(local_table));
 }
 
 /**
@@ -212,7 +212,7 @@ distribute_table(
  *
  * @return Merged table on the root rank. `nullptr` on all other ranks.
  */
-std::unique_ptr<cudf::experimental::table>
+std::unique_ptr<cudf::table>
 collect_tables(
     cudf::table_view table,
     Communicator *communicator)
@@ -292,9 +292,9 @@ collect_tables(
     }
 
     if (mpi_rank == 0) {
-        return std::make_unique<cudf::experimental::table>(std::move(merged_columns));
+        return std::make_unique<cudf::table>(std::move(merged_columns));
     } else {
-        return std::unique_ptr<cudf::experimental::table>(nullptr);
+        return std::unique_ptr<cudf::table>(nullptr);
     }
 }
 

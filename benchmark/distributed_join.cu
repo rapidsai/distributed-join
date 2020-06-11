@@ -43,8 +43,6 @@ static constexpr KEY_T RAND_MAX_VAL = 200'000'000;
 static constexpr bool IS_BUILD_TABLE_KEY_UNIQUE = true;
 static constexpr int OVER_DECOMPOSITION_FACTOR = 1;
 
-using cudf::experimental::table;
-
 
 int main(int argc, char *argv[])
 {
@@ -61,8 +59,8 @@ int main(int argc, char *argv[])
 
     /* Generate build table and probe table on each node */
 
-    std::unique_ptr<table> left;
-    std::unique_ptr<table> right;
+    std::unique_ptr<cudf::table> left;
+    std::unique_ptr<cudf::table> right;
 
     std::tie(left, right) = generate_tables_distributed<KEY_T, PAYLOAD_T>(
         BUILD_TABLE_NROWS_EACH_RANK, PROBE_TABLE_NROWS_EACH_RANK,
@@ -78,7 +76,7 @@ int main(int argc, char *argv[])
     cudaProfilerStart();
     double start = MPI_Wtime();
 
-    std::unique_ptr<table> join_result = distributed_inner_join(
+    std::unique_ptr<cudf::table> join_result = distributed_inner_join(
         left->view(), right->view(),
         {0}, {0}, {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
         &communicator, OVER_DECOMPOSITION_FACTOR

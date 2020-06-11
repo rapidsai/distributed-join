@@ -41,7 +41,7 @@ static constexpr KEY_T RAND_MAX_VAL = 2'000'000;
 static constexpr bool IS_BUILD_TABLE_KEY_UNIQUE = true;
 static constexpr int OVER_DECOMPOSITION_FACTOR = 10;
 
-using cudf::experimental::table;
+using cudf::table;
 
 
 template<typename data_type>
@@ -87,7 +87,7 @@ int main(int argc, char *argv[])
         build_view = build->view();
         probe_view = probe->view();
 
-        reference = cudf::experimental::inner_join(
+        reference = cudf::inner_join(
             build->view(), probe->view(),
             {0}, {0}, {std::pair<cudf::size_type, cudf::size_type>(0, 0)}
         );
@@ -119,8 +119,8 @@ int main(int argc, char *argv[])
         cudf::size_type nrows = reference->num_rows();
         assert(join_result->num_rows() == nrows);
 
-        std::unique_ptr<table> join_sorted = cudf::experimental::sort(join_result->view());
-        std::unique_ptr<table> reference_sorted = cudf::experimental::sort(reference->view());
+        std::unique_ptr<table> join_sorted = cudf::sort(join_result->view());
+        std::unique_ptr<table> reference_sorted = cudf::sort(reference->view());
 
         // Get the number of thread blocks based on thread block size
 

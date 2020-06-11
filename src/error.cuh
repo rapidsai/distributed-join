@@ -20,7 +20,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <rmm/rmm.h>
-#include <cudf/cudf.h>
 
 
 #ifndef CUDA_RT_CALL
@@ -41,17 +40,6 @@
     if (RMM_SUCCESS != rmmStatus)                                                                  \
         fprintf(stderr, "\"%s\" in line %d of file %s failed with %s (%d).\n",                     \
                         #call, __LINE__, __FILE__, rmmGetErrorString(rmmStatus), rmmStatus);       \
-}
-#endif
-
-
-#ifndef GDF_CALL
-#define GDF_CALL(call)                                                                             \
-{                                                                                                  \
-    gdf_error status = call;                                                                       \
-    if (GDF_SUCCESS != status)                                                                     \
-        fprintf(stderr, "\"%s\" in line %d of file %s failed with %s (%d).\n",                     \
-                        #call, __LINE__, __FILE__, gdf_error_get_name(status), status);            \
 }
 #endif
 

@@ -35,7 +35,7 @@
 #include "../generate_dataset/generate_dataset.cuh"
 #include "distributed_join.cuh"
 
-using cudf::experimental::table;
+using cudf::table;
 
 
 /**
@@ -68,11 +68,11 @@ generate_build_probe_tables(cudf::size_type build_table_nrows,
     std::vector<std::unique_ptr<cudf::column> > probe;
 
     constexpr cudf::data_type key_type = cudf::data_type(
-        cudf::experimental::type_to_id<KEY_T>()
+        cudf::type_to_id<KEY_T>()
     );
 
     constexpr cudf::data_type payload_type = cudf::data_type(
-        cudf::experimental::type_to_id<PAYLOAD_T>()
+        cudf::type_to_id<PAYLOAD_T>()
     );
 
     build.push_back(std::move(

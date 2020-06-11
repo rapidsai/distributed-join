@@ -19,6 +19,7 @@
 #include <cstring>
 #include <rmm/rmm.h>
 #include <cstdlib>
+#include <cassert>
 
 #include "communicator.h"
 #include "error.cuh"

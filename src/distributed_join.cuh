@@ -43,7 +43,7 @@
 
 using std::vector;
 using cudf::column;
-using cudf::experimental::table;
+using cudf::table;
 using std::chrono::high_resolution_clock;
 using std::chrono::duration_cast;
 using std::chrono::milliseconds;
@@ -241,7 +241,7 @@ inner_join_func(
         if (local_left->num_rows() && local_right->num_rows()) {
             // Perform local join only when both left and right tables are not empty.
             // If either is empty, the local join will return the other table, which is not desired.
-            batch_join_results[ibatch] = cudf::experimental::inner_join(
+            batch_join_results[ibatch] = cudf::inner_join(
                 local_left->view(), local_right->view(),
                 left_on, right_on, columns_in_common
             );
@@ -430,7 +430,7 @@ distributed_inner_join(
         batch_join_results_view.push_back(table_ptr->view());
     }
 
-    return cudf::experimental::concatenate(batch_join_results_view);
+    return cudf::concatenate(batch_join_results_view);
 }
 
 #endif  // __DISTRIBUTED_JOIN
