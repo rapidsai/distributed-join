@@ -15,11 +15,12 @@
  */
 
 #include <vector>
-#include <rmm/rmm.h>
 #include <mpi.h>
 #include <iostream>
 #include <cuda_profiler_api.h>
 #include <cstdint>
+#include <rmm/mr/device/default_memory_resource.hpp>
+#include <rmm/mr/device/device_memory_resource.hpp>
 
 #include "../src/communicator.h"
 #include "../src/error.cuh"
@@ -40,6 +41,8 @@ int main(int argc, char *argv[])
     communicator.setup_cache(2 * mpi_size, BUFFER_SIZE);
     communicator.warmup_cache();
 
+    auto mr = rmm::mr::get_default_resource();
+
     /* Warmup if necessary */
 
     if (WARM_UP) {
@@ -48,7 +51,7 @@ int main(int argc, char *argv[])
         std::vector<void *> warmup_recv_buffer(mpi_size, nullptr);
 
         for (int irank = 0; irank < mpi_size; irank ++) {
-            RMM_CALL(RMM_ALLOC(&warmup_send_buffer[irank], WARMUP_BUFFER_SIZE, 0));
+            warmup_send_buffer[irank] = mr->allocate(WARMUP_BUFFER_SIZE, 0);
         }
 
         std::vector<comm_handle_t> warmup_send_reqs(mpi_size, nullptr);
@@ -78,8 +81,8 @@ int main(int argc, char *argv[])
         communicator.waitall(warmup_recv_reqs);
 
         for (int irank = 0; irank < mpi_rank; irank ++) {
-            RMM_CALL(RMM_FREE(warmup_send_buffer[irank], 0));
-            RMM_CALL(RMM_FREE(warmup_recv_buffer[irank], 0));
+            mr->deallocate(warmup_send_buffer[irank], 0, 0);
+            mr->deallocate(warmup_recv_buffer[irank], 0, 0);
         }
     }
 
@@ -89,7 +92,7 @@ int main(int argc, char *argv[])
     std::vector<void *> recv_buffer(mpi_size, nullptr);
 
     for (int irank = 0; irank < mpi_size; irank ++) {
-        RMM_CALL(RMM_ALLOC(&send_buffer[irank], SIZE / mpi_size, 0));
+        send_buffer[irank] = mr->allocate(SIZE / mpi_size, 0);
     }
 
     std::vector<comm_handle_t> send_reqs(mpi_size, nullptr);
@@ -122,7 +125,7 @@ int main(int argc, char *argv[])
         communicator.waitall(recv_reqs);
 
         for (int irank = 0; irank < mpi_rank; irank ++)
-            RMM_CALL(RMM_FREE(recv_buffer[irank], 0));
+            mr->deallocate(recv_buffer[irank], 0, 0);
     }
 
     double stop = MPI_Wtime();
@@ -137,7 +140,7 @@ int main(int argc, char *argv[])
     /* Cleanup */
 
     for(int irank = 0; irank < mpi_rank; irank++) {
-        RMM_CALL(RMM_FREE(send_buffer[irank], 0));
+        mr->deallocate(send_buffer[irank], 0, 0);
     }
 
     communicator.finalize();

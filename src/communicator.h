@@ -120,6 +120,7 @@ class UCXCommunicator: public Communicator
 
 public:
 
+~UCXCommunicator();
 virtual void initialize(int argc, char *argv[]);
 virtual comm_handle_t send(const void *buf, int64_t count, int element_size, int dest, int tag);
 virtual comm_handle_t recv(void *buf, int64_t count, int element_size, int source, int tag);
