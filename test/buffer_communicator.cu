@@ -17,6 +17,10 @@
 #include <cstdint>
 #include <vector>
 #include <iostream>
+#include <cassert>
+
+#include <rmm/device_buffer.hpp>
+#include <rmm/mr/device/default_memory_resource.hpp>
 
 #include "../src/communicator.h"
 #include "../src/error.cuh"
@@ -59,23 +63,23 @@ int main(int argc, char *argv[])
 
     /* Send and recv data */
 
-    uint64_t *send_buf {nullptr};
+    rmm::device_buffer send_buf {COUNT * sizeof(uint64_t), 0};
     std::vector<uint64_t *> recv_buf(mpi_size, nullptr);
 
     std::vector<comm_handle_t> send_reqs(mpi_size, nullptr);
     std::vector<comm_handle_t> recv_reqs(mpi_size, nullptr);
 
-    RMM_CALL(RMM_ALLOC(&send_buf, COUNT * sizeof(uint64_t), 0));
-
     int grid_size {-1};
     int block_size {-1};
 
     CUDA_RT_CALL(cudaOccupancyMaxPotentialBlockSize(&grid_size, &block_size, set_data));
-    set_data<<<grid_size, block_size>>>(send_buf, COUNT, COUNT * mpi_rank);
+    set_data<<<grid_size, block_size>>>(
+        static_cast<uint64_t *>(send_buf.data()), COUNT, COUNT * mpi_rank
+    );
 
     for (int irank = 0; irank < mpi_size; irank ++) {
         if (irank != mpi_rank) {
-            send_reqs[irank] = communicator.send((void *)send_buf, COUNT, sizeof(uint64_t), irank, 32);
+            send_reqs[irank] = communicator.send(send_buf.data(), COUNT, sizeof(uint64_t), irank, 32);
         }
     }
 
@@ -104,10 +108,9 @@ int main(int argc, char *argv[])
 
     /* Cleanup */
 
-    RMM_CALL(RMM_FREE(send_buf, 0));
     for (int irank = 0; irank < mpi_size; irank ++) {
         if (irank != mpi_rank) {
-            RMM_CALL(RMM_FREE(recv_buf[irank], 0));
+            rmm::mr::get_default_resource()->deallocate(recv_buf[irank], 0, 0);
         }
     }
 

@@ -17,8 +17,11 @@
 #include <mpi.h>
 #include <ucp/api/ucp.h>
 #include <cstring>
-#include <rmm/rmm.h>
 #include <cstdlib>
+#include <cassert>
+
+#include <rmm/mr/device/default_memory_resource.hpp>
+#include <rmm/mr/device/cnmem_memory_resource.hpp>
 
 #include "communicator.h"
 #include "error.cuh"
@@ -104,12 +107,8 @@ void UCXCommunicator::initialize_cuda()
     CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
     const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
 
-    rmmOptions_t rmm_options;
-    rmm_options.allocation_mode = PoolAllocation;
-    rmm_options.initial_pool_size = pool_size;
-    rmm_options.enable_logging = false;
-
-    RMM_CALL(rmmInitialize(&rmm_options));
+    auto cnmem_mr = new rmm::mr::cnmem_memory_resource(pool_size);
+    rmm::mr::set_default_resource(cnmem_mr);
 }
 
 
@@ -119,6 +118,13 @@ void UCXCommunicator::initialize(int argc, char *argv[])
     initialize_ucx();
     create_endpoints();
     initialize_cuda();
+}
+
+
+UCXCommunicator::~UCXCommunicator()
+{
+    auto mr = rmm::mr::get_default_resource();
+    delete mr;
 }
 
 
@@ -178,7 +184,7 @@ comm_handle_t UCXCommunicator::recv(void **buf, int64_t *count, int element_size
 
     /* Allocate receive buffer */
 
-    CHECK_ERROR(RMM_ALLOC(buf, ucp_probe_info.length, 0), RMM_SUCCESS, "RMM_ALLOC");
+    *buf = rmm::mr::get_default_resource()->allocate(ucp_probe_info.length, 0);
 
     /* Received data */
 
@@ -337,8 +343,7 @@ void UCXBufferCommunicator::initialize(int argc, char *argv[])
 void UCXBufferCommunicator::setup_cache(int64_t ncaches, int64_t buffer_size)
 {
     comm_buffer_size = buffer_size;
-
-    RMM_CALL(RMM_ALLOC(&cache_start_addr, comm_buffer_size * ncaches, 0));
+    cache_start_addr = rmm::mr::get_default_resource()->allocate(comm_buffer_size * ncaches, 0);
 
     for (int icache = 0; icache < ncaches; icache ++) {
         void *current_buffer = (void *)((char *)cache_start_addr + icache * buffer_size);
@@ -547,7 +552,9 @@ static void recv_handler(void *request, ucs_status_t status,
 
     if (*(info->recv_buffer) == nullptr && *(info->count) > 0) {
         assert(info->ibatch == 0);
-        RMM_CALL( RMM_ALLOC(info->recv_buffer, *(info->count) * element_size, 0) );
+        *(info->recv_buffer) = rmm::mr::get_default_resource()->allocate(
+            *(info->count) * element_size, 0
+        );
     }
 
     /* Copy data from communication buffer to user buffer for the finished batch */
@@ -771,7 +778,6 @@ void UCXBufferCommunicator::waitall(std::vector<comm_handle_t>::const_iterator b
 
 void UCXBufferCommunicator::finalize()
 {
-    RMM_CALL(RMM_FREE(cache_start_addr, 0));
-
+    rmm::mr::get_default_resource()->deallocate(cache_start_addr, 0);
     UCXCommunicator::finalize();
 }

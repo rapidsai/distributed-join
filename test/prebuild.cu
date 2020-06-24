@@ -34,7 +34,7 @@
 #include "../src/distribute_table.cuh"
 #include "../src/distributed_join.cuh"
 
-using cudf::experimental::table;
+using cudf::table;
 
 static constexpr cudf::size_type SIZE = 30000;
 static constexpr int OVER_DECOMPOSITION_FACTOR = 1;

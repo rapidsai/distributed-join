@@ -24,6 +24,7 @@
 
 #include <cudf/types.hpp>
 #include <rmm/device_buffer.hpp>
+#include <rmm/mr/device/default_memory_resource.hpp>
 
 #include "communicator.h"
 #include "error.cuh"
@@ -196,7 +197,7 @@ merge_free_received_offset(
         if (!self_free && irank == communicator->mpi_rank)
             continue;
 
-        RMM_CALL(RMM_FREE(received_data[irank], 0));
+        rmm::mr::get_default_resource()->deallocate(received_data[irank], 0, 0);
     }
 
     return merged_data;
