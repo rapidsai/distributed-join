@@ -32,8 +32,8 @@ test/prebuild: test/prebuild.cu $(src)
 test/buffer_communicator: test/buffer_communicator.cu $(src)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o test/buffer_communicator test/buffer_communicator.cu src/communicator.o
 
-src/communicator.o: src/communicator.h src/communicator.cpp
-	$(CC) $(CFLAGS) $(LDFLAGS) -o src/communicator.o -c src/communicator.cpp
+src/communicator.o: src/communicator.h src/communicator.cu
+	$(CC) $(CFLAGS) $(LDFLAGS) -o src/communicator.o -c src/communicator.cu
 
 clean:
 	rm -f benchmark/distributed_join benchmark/all_to_all test/compare_against_shared test/prebuild src/communicator.o test/buffer_communicator
