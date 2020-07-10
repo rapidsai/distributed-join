@@ -44,10 +44,39 @@
 static cudf::size_type BUILD_TABLE_NROWS_EACH_RANK = 100'000'000;
 static cudf::size_type PROBE_TABLE_NROWS_EACH_RANK = 100'000'000;
 static double SELECTIVITY = 0.3;
-static KEY_T RAND_MAX_VAL = 200'000'000;
 static bool IS_BUILD_TABLE_KEY_UNIQUE = true;
 static int OVER_DECOMPOSITION_FACTOR = 1;
 static bool USE_BUFFER_COMMUNICATOR = false;
+
+
+void parse_command_line_arguments(int argc, char *argv[])
+{
+    for (int iarg = 0; iarg < argc; iarg++) {
+        if (!strcmp(argv[iarg], "--build-table-nrows")) {
+            BUILD_TABLE_NROWS_EACH_RANK = atoi(argv[iarg + 1]);
+        }
+
+        if (!strcmp(argv[iarg], "--probe-table-nrows")) {
+            PROBE_TABLE_NROWS_EACH_RANK = atoi(argv[iarg + 1]);
+        }
+
+        if (!strcmp(argv[iarg], "--selectivity")) {
+            SELECTIVITY = atof(argv[iarg + 1]);
+        }
+
+        if (!strcmp(argv[iarg], "--duplicate-build-keys")) {
+            IS_BUILD_TABLE_KEY_UNIQUE = false;
+        }
+
+        if (!strcmp(argv[iarg], "--over-decomposition-factor")) {
+            OVER_DECOMPOSITION_FACTOR = atoi(argv[iarg + 1]);
+        }
+
+        if (!strcmp(argv[iarg], "--use-buffer-communicator")) {
+            USE_BUFFER_COMMUNICATOR = true;
+        }
+    }
+}
 
 
 int main(int argc, char *argv[])
@@ -55,6 +84,12 @@ int main(int argc, char *argv[])
     /* Initialize topology */
 
     setup_topology(argc, argv);
+
+    /* Parse command line arguments */
+
+    parse_command_line_arguments(argc, argv);
+
+    KEY_T RAND_MAX_VAL = std::max(BUILD_TABLE_NROWS_EACH_RANK, PROBE_TABLE_NROWS_EACH_RANK) * 2;
 
     /* Initialize memory pool */
 

@@ -214,7 +214,7 @@ inner_join_func(
     vector<std::pair<cudf::size_type, cudf::size_type>> const& columns_in_common,
     vector<bool> const& flags,
     Communicator *communicator,
-    bool report_timing, 
+    bool report_timing,
     rmm::mr::device_memory_resource* mr)
 {
     CUDA_RT_CALL(cudaSetDevice(communicator->current_device));
