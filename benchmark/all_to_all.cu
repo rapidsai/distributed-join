@@ -38,11 +38,11 @@ void parse_command_line_arguments(int argc, char *argv[])
 {
     for (int iarg = 0; iarg < argc; iarg++) {
         if (!strcmp(argv[iarg], "--size")) {
-            SIZE = atoi(argv[iarg + 1]);
+            SIZE = atol(argv[iarg + 1]);
         }
 
         if (!strcmp(argv[iarg], "--buffer-size")) {
-            BUFFER_SIZE = atoi(argv[iarg + 1]);
+            BUFFER_SIZE = atol(argv[iarg + 1]);
         }
 
         if (!strcmp(argv[iarg], "--repeat")) {

@@ -34,17 +34,42 @@
 #include "../src/distribute_table.cuh"
 #include "../src/distributed_join.cuh"
 
+using cudf::table;
+
 #define KEY_T int
 #define PAYLOAD_T int
 
-static constexpr cudf::size_type BUILD_TABLE_SIZE = 1'000'000;
-static constexpr cudf::size_type PROBE_TABLE_SIZE = 5'000'000;
-static constexpr double SELECTIVITY = 0.3;
-static constexpr KEY_T RAND_MAX_VAL = 2'000'000;
-static constexpr bool IS_BUILD_TABLE_KEY_UNIQUE = true;
-static constexpr int OVER_DECOMPOSITION_FACTOR = 10;
+static cudf::size_type BUILD_TABLE_SIZE = 1'000'000;
+static cudf::size_type PROBE_TABLE_SIZE = 5'000'000;
+static double SELECTIVITY = 0.3;
+static bool IS_BUILD_TABLE_KEY_UNIQUE = true;
+static int OVER_DECOMPOSITION_FACTOR = 10;
 
-using cudf::table;
+
+void parse_command_line_arguments(int argc, char *argv[])
+{
+    for (int iarg = 0; iarg < argc; iarg++) {
+        if (!strcmp(argv[iarg], "--build-table-nrows")) {
+            BUILD_TABLE_SIZE = atoi(argv[iarg + 1]);
+        }
+
+        if (!strcmp(argv[iarg], "--probe-table-nrows")) {
+            PROBE_TABLE_SIZE = atoi(argv[iarg + 1]);
+        }
+
+        if (!strcmp(argv[iarg], "--selectivity")) {
+            SELECTIVITY = atof(argv[iarg + 1]);
+        }
+
+        if (!strcmp(argv[iarg], "--duplicate-build-keys")) {
+            IS_BUILD_TABLE_KEY_UNIQUE = false;
+        }
+
+        if (!strcmp(argv[iarg], "--over-decomposition-factor")) {
+            OVER_DECOMPOSITION_FACTOR = atoi(argv[iarg + 1]);
+        }
+    }
+}
 
 
 template<typename data_type>
@@ -65,6 +90,10 @@ int main(int argc, char *argv[])
     /* Initialize topology */
 
     setup_topology(argc, argv);
+
+    /* Parse command line arguments */
+
+    parse_command_line_arguments(argc, argv);
 
     /* Initialize memory pool */
 
@@ -96,6 +125,8 @@ int main(int argc, char *argv[])
     cudf::table_view probe_view;
 
     if (mpi_rank == 0) {
+        KEY_T RAND_MAX_VAL = BUILD_TABLE_SIZE * 2;
+
         std::tie(build, probe) = generate_build_probe_tables<KEY_T, PAYLOAD_T>(
             BUILD_TABLE_SIZE, PROBE_TABLE_SIZE, SELECTIVITY, RAND_MAX_VAL, IS_BUILD_TABLE_KEY_UNIQUE
         );

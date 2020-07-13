@@ -39,14 +39,21 @@
 
 using cudf::table;
 
-static constexpr cudf::size_type SIZE = 30000;
-static constexpr int OVER_DECOMPOSITION_FACTOR = 1;
+static cudf::size_type SIZE = 30000;  // must be a multiple of 5
+static int OVER_DECOMPOSITION_FACTOR = 1;
 
 
-__global__ void fill_buffer(int *buffer, int multiple)
+void parse_command_line_arguments(int argc, char *argv[])
 {
-    for (size_t i = threadIdx.x + blockDim.x * blockIdx.x; i < SIZE; i += blockDim.x * gridDim.x)
-        buffer[i] = i * multiple;
+    for (int iarg = 0; iarg < argc; iarg++) {
+        if (!strcmp(argv[iarg], "--size")) {
+            SIZE = atoi(argv[iarg + 1]);
+        }
+
+        if (!strcmp(argv[iarg], "--over-decomposition-factor")) {
+            OVER_DECOMPOSITION_FACTOR = atoi(argv[iarg + 1]);
+        }
+    }
 }
 
 
@@ -94,6 +101,10 @@ int main(int argc, char *argv[])
     /* Initialize topology */
 
     setup_topology(argc, argv);
+
+    /* Parse command line arguments */
+
+    parse_command_line_arguments(argc, argv);
 
     /* Initialize memory pool */
 
@@ -157,7 +168,7 @@ int main(int argc, char *argv[])
             &nblocks, verify_correctness, block_size, 0
         ));
 
-        assert(merged_table->num_rows() == 6000);
+        assert(merged_table->num_rows() == SIZE / 5);
 
         verify_correctness<<<nblocks, block_size>>>(
             merged_table->get_column(0).view().head<int>(),
