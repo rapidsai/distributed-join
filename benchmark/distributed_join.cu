@@ -79,6 +79,33 @@ void parse_command_line_arguments(int argc, char *argv[])
 }
 
 
+void report_configuration()
+{
+    MPI_CALL( MPI_Barrier(MPI_COMM_WORLD) );
+
+    int mpi_rank;
+    int mpi_size;
+    MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
+    MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
+    if (mpi_rank != 0)
+        return;
+
+    std::cout << "========== Parameters ==========" << std::endl;
+    std::cout << std::boolalpha;
+    std::cout << "Number of rows in the build table: "
+              << static_cast<uint64_t>(BUILD_TABLE_NROWS_EACH_RANK) * mpi_size / 1e6
+              << " million" << std::endl;
+    std::cout << "Number of rows in the probe table: "
+              << static_cast<uint64_t>(PROBE_TABLE_NROWS_EACH_RANK) * mpi_size / 1e6
+              << " million" << std::endl;
+    std::cout << "Selectivity: " << SELECTIVITY << std::endl;
+    std::cout << "Keys in build table are unique: " << IS_BUILD_TABLE_KEY_UNIQUE << std::endl;
+    std::cout << "Over-decomposition factor: " << OVER_DECOMPOSITION_FACTOR << std::endl;
+    std::cout << "Buffer communicator: " << USE_BUFFER_COMMUNICATOR << std::endl;
+    std::cout << "================================" << std::endl;
+}
+
+
 int main(int argc, char *argv[])
 {
     /* Initialize topology */
@@ -88,6 +115,7 @@ int main(int argc, char *argv[])
     /* Parse command line arguments */
 
     parse_command_line_arguments(argc, argv);
+    report_configuration();
 
     KEY_T RAND_MAX_VAL = std::max(BUILD_TABLE_NROWS_EACH_RANK, PROBE_TABLE_NROWS_EACH_RANK) * 2;
 
