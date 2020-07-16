@@ -24,7 +24,10 @@
 #include <cudf/join.hpp>
 #include <cudf/sorting.hpp>
 #include <cudf/types.hpp>
+#include <rmm/mr/device/default_memory_resource.hpp>
+#include <rmm/mr/device/cnmem_memory_resource.hpp>
 
+#include "../src/topology.cuh"
 #include "../src/communicator.h"
 #include "../src/error.cuh"
 #include "../src/generate_table.cuh"
@@ -59,16 +62,29 @@ verify_correctness(const data_type *data1, const data_type *data2, cudf::size_ty
 
 int main(int argc, char *argv[])
 {
-    /* Initialize communication */
+    /* Initialize topology */
 
-    UCXBufferCommunicator communicator;
-    communicator.initialize(argc, argv);
+    setup_topology(argc, argv);
 
-    int mpi_rank {communicator.mpi_rank};
-    int mpi_size {communicator.mpi_size};
+    /* Initialize memory pool */
 
-    communicator.setup_cache(2 * 3 * 2 * 2 * mpi_size, 1'000'000LL);
-    communicator.warmup_cache();
+    size_t free_memory, total_memory;
+    CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
+    const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
+
+    rmm::mr::cnmem_memory_resource mr {pool_size};
+    rmm::mr::set_default_resource(&mr);
+
+    /* Initialize communicator */
+
+    int mpi_rank;
+    int mpi_size;
+    MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
+    MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
+
+    UCXCommunicator* communicator = initialize_ucx_communicator(
+        true, 2 * 3 * 2 * 2 * mpi_size, 1'000'000LL
+    );
 
     /* Generate build table and probe table and compute reference solution */
 
@@ -93,21 +109,21 @@ int main(int argc, char *argv[])
         );
     }
 
-    std::unique_ptr<table> local_build = distribute_table(build_view, &communicator);
-    std::unique_ptr<table> local_probe = distribute_table(probe_view, &communicator);
+    std::unique_ptr<table> local_build = distribute_table(build_view, communicator);
+    std::unique_ptr<table> local_probe = distribute_table(probe_view, communicator);
 
     /* Distributed join */
 
     std::unique_ptr<table> join_result_all_ranks = distributed_inner_join(
         local_build->view(), local_probe->view(),
         {0}, {0}, {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
-        &communicator, OVER_DECOMPOSITION_FACTOR
+        communicator, OVER_DECOMPOSITION_FACTOR
     );
 
     /* Send join result from all ranks to the root rank */
 
     std::unique_ptr<table> join_result = collect_tables(
-        join_result_all_ranks->view(), &communicator
+        join_result_all_ranks->view(), communicator
     );
 
     /* Verify correctness */
@@ -158,7 +174,8 @@ int main(int argc, char *argv[])
 
     /* Cleanup */
 
-    communicator.finalize();
+    communicator->finalize();
+    delete communicator;
 
     if (mpi_rank == 0) {
         std::cerr << "Test case \"compare_against_shared\" passes successfully.\n";

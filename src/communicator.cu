@@ -19,24 +19,20 @@
 #include <cstring>
 #include <cstdlib>
 #include <cassert>
+#include <iostream>
 
 #include <rmm/mr/device/default_memory_resource.hpp>
-#include <rmm/mr/device/cnmem_memory_resource.hpp>
 
 #include "communicator.h"
 #include "error.cuh"
 
 
-void UCXCommunicator::initialize_mpi(int argc, char *argv[])
-{
-    MPI_Init(&argc, &argv);
-    MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
-}
-
-
 void UCXCommunicator::initialize_ucx()
 {
+    MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
+    MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
+    CUDA_RT_CALL( cudaGetDevice(&current_device) );
+
     ucp_params_t        ucp_params;
     ucp_config_t        *ucp_config;
     ucp_worker_params_t ucp_worker_params;
@@ -92,39 +88,10 @@ void UCXCommunicator::create_endpoints()
 }
 
 
-void UCXCommunicator::initialize_cuda()
+void UCXCommunicator::initialize()
 {
-    CUDA_RT_CALL(cudaGetDeviceCount(&device_count));
-    std::cout << "Device count: " << device_count << std::endl;
-
-    current_device = mpi_rank % device_count;
-
-    CUDA_RT_CALL(cudaSetDevice(current_device));
-    std::cout << "Rank " << mpi_rank << " select " << current_device << "/" << device_count << " GPU"
-              << std::endl;
-
-    size_t free_memory, total_memory;
-    CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
-    const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
-
-    auto cnmem_mr = new rmm::mr::cnmem_memory_resource(pool_size);
-    rmm::mr::set_default_resource(cnmem_mr);
-}
-
-
-void UCXCommunicator::initialize(int argc, char *argv[])
-{
-    initialize_mpi(argc, argv);
     initialize_ucx();
     create_endpoints();
-    initialize_cuda();
-}
-
-
-UCXCommunicator::~UCXCommunicator()
-{
-    auto mr = rmm::mr::get_default_resource();
-    delete mr;
 }
 
 
@@ -289,6 +256,10 @@ void UCXBufferCommunicator::initialize_ucx()
     // Note: This initialization is different from UCXCommunicator on requesting reserved space in the communication
     // handle.
 
+    MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
+    MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
+    CUDA_RT_CALL( cudaGetDevice(&current_device) );
+
     ucp_params_t        ucp_params;
     ucp_config_t        *ucp_config;
     ucp_worker_params_t ucp_worker_params;
@@ -321,9 +292,9 @@ void UCXBufferCommunicator::initialize_ucx()
 }
 
 
-void UCXBufferCommunicator::initialize(int argc, char *argv[])
+void UCXBufferCommunicator::initialize()
 {
-    UCXCommunicator::initialize(argc, argv);
+    UCXCommunicator::initialize();
 
     if (mpi_size > 65536) {
         throw "Ranks > 65536 is not supported due to tag limitation.";
@@ -780,4 +751,24 @@ void UCXBufferCommunicator::finalize()
 {
     rmm::mr::get_default_resource()->deallocate(cache_start_addr, 0);
     UCXCommunicator::finalize();
+}
+
+
+UCXCommunicator* initialize_ucx_communicator(bool use_buffer_communicator,
+                                             int num_comm_buffers,
+                                             int64_t comm_buffer_size)
+{
+    if (use_buffer_communicator) {
+        UCXBufferCommunicator *communicator = new UCXBufferCommunicator();
+        communicator->initialize();
+
+        communicator->setup_cache(num_comm_buffers, comm_buffer_size);
+        communicator->warmup_cache();
+
+        return communicator;
+    } else {
+        UCXCommunicator *communicator = new UCXCommunicator();
+        communicator->initialize();
+        return communicator;
+    }
 }

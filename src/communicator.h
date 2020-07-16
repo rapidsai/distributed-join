@@ -35,11 +35,8 @@ public:
 /**
  * Initialize the communicator. This method should be called by all ranks in MPI_COMM_WORLD. Also, each rank should
  * call this method at most once. In other word, multiple communicators are not supported.
- *
- * @param[in] argc      Number of arguments in argv.
- * @param[in] argv      Arguments passed to MPI_Init.
  */
-virtual void initialize(int argc, char *argv[]) = 0;
+virtual void initialize() = 0;
 
 /**
  * Send data to a remote rank asynchronously.
@@ -109,7 +106,6 @@ virtual void finalize() = 0;
 
 int mpi_rank;
 int mpi_size;
-int device_count;
 int current_device;
 
 };
@@ -120,8 +116,7 @@ class UCXCommunicator: public Communicator
 
 public:
 
-~UCXCommunicator();
-virtual void initialize(int argc, char *argv[]);
+virtual void initialize();
 virtual comm_handle_t send(const void *buf, int64_t count, int element_size, int dest, int tag);
 virtual comm_handle_t recv(void *buf, int64_t count, int element_size, int source, int tag);
 virtual comm_handle_t recv(void **buf, int64_t *count, int element_size, int source, int tag);
@@ -138,14 +133,8 @@ std::vector<ucp_ep_h> ucp_endpoints;
 
 private:
 
-virtual void initialize_mpi(int argc, char *argv[]);
 virtual void initialize_ucx();
 virtual void create_endpoints();
-
-/**
- * This helper function selects the CUDA device and sets up RMM memory pool.
- */
-virtual void initialize_cuda();
 
 };
 
@@ -155,7 +144,7 @@ class UCXBufferCommunicator: public UCXCommunicator
 
 public:
 
-virtual void initialize(int argc, char *argv[]);
+virtual void initialize();
 
 /**
  * Allocate communication buffers and put them into the 'buffer_cache' queue.
@@ -239,6 +228,28 @@ comm_handle_t recv_helper(void **buf, int64_t *count, int element_size, int sour
 void *cache_start_addr;
 
 };
+
+
+/**
+ * Helper function for constructing a *UCXCommunicator*. This function needed to be called after
+ * MPI is initialized and CUDA device has been selected.
+ *
+ * @param[in] use_buffer_communicator   If this argument is set to *true*, a buffered communicator
+ *                                      is constructed. Otherwise, a normal UCX communicator is
+ *                                      constructed.
+ * @param[in] num_comm_buffers          Number of communication buffers for buffered communicator.
+ *                                      This argument is omitted if *use_buffer_communicator* is
+ *                                      false.
+ * @param[in] comm_buffer_size          The size of each communication buffer for buffered
+ *                                      communicator. This argument is omitted if
+ *                                      *use_buffer_communicator* is false.
+ *
+ * @returns                             Constructed communicator. It is the caller's responsibility
+ *                                      to free this communicator using *delete*.
+ */
+UCXCommunicator* initialize_ucx_communicator(bool use_buffer_communicator,
+                                             int num_comm_buffers,
+                                             int64_t comm_buffer_size);
 
 
 #endif // __COMMUNICATOR_CUH

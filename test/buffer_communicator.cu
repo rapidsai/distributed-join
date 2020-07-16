@@ -18,10 +18,13 @@
 #include <vector>
 #include <iostream>
 #include <cassert>
+#include <mpi.h>
 
 #include <rmm/device_buffer.hpp>
 #include <rmm/mr/device/default_memory_resource.hpp>
+#include <rmm/mr/device/cnmem_memory_resource.hpp>
 
+#include "../src/topology.cuh"
 #include "../src/communicator.h"
 #include "../src/error.cuh"
 
@@ -52,14 +55,29 @@ __global__ void test_correctness(uint64_t *start_addr, uint64_t size, uint64_t s
 
 int main(int argc, char *argv[])
 {
-    UCXBufferCommunicator communicator;
-    communicator.initialize(argc, argv);
+    /* Initialize topology */
 
-    int mpi_rank = communicator.mpi_rank;
-    int mpi_size = communicator.mpi_size;
+    setup_topology(argc, argv);
 
-    communicator.setup_cache(2 * mpi_size, 20'000'000LL);
-    communicator.warmup_cache();
+    /* Initialize memory pool */
+
+    size_t free_memory, total_memory;
+    CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
+    const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
+
+    rmm::mr::cnmem_memory_resource mr {pool_size};
+    rmm::mr::set_default_resource(&mr);
+
+    /* Initialize communicator */
+
+    int mpi_rank;
+    int mpi_size;
+    MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
+    MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
+
+    UCXCommunicator* communicator = initialize_ucx_communicator(
+        true, 2 * mpi_size, 20'000'000LL
+    );
 
     /* Send and recv data */
 
@@ -79,7 +97,7 @@ int main(int argc, char *argv[])
 
     for (int irank = 0; irank < mpi_size; irank ++) {
         if (irank != mpi_rank) {
-            send_reqs[irank] = communicator.send(send_buf.data(), COUNT, sizeof(uint64_t), irank, 32);
+            send_reqs[irank] = communicator->send(send_buf.data(), COUNT, sizeof(uint64_t), irank, 32);
         }
     }
 
@@ -87,14 +105,14 @@ int main(int argc, char *argv[])
 
     for (int irank = mpi_size - 1; irank >= 0; irank --) {
         if (irank != mpi_rank) {
-            recv_reqs[irank] = communicator.recv(
+            recv_reqs[irank] = communicator->recv(
                 (void **)&recv_buf[irank], &count_received, sizeof(uint64_t), irank, 32
             );
         }
     }
 
-    communicator.waitall(send_reqs);
-    communicator.waitall(recv_reqs);
+    communicator->waitall(send_reqs);
+    communicator->waitall(recv_reqs);
 
     assert(count_received == COUNT);
 
@@ -114,7 +132,8 @@ int main(int argc, char *argv[])
         }
     }
 
-    communicator.finalize();
+    communicator->finalize();
+    delete communicator;
 
     if (mpi_rank == 0) {
         std::cerr << "Test case \"buffer_communicator\" passes successfully.\n";

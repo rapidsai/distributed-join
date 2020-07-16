@@ -26,9 +26,12 @@
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
 #include <cudf/join.hpp>
+#include <rmm/mr/device/default_memory_resource.hpp>
+#include <rmm/mr/device/cnmem_memory_resource.hpp>
 #include <thrust/sequence.h>
 #include <thrust/execution_policy.h>
 
+#include "../src/topology.cuh"
 #include "../src/communicator.h"
 #include "../src/error.cuh"
 #include "../src/distribute_table.cuh"
@@ -88,16 +91,29 @@ generate_table(int multiple)
 
 int main(int argc, char *argv[])
 {
-    /* Initialize communication */
+    /* Initialize topology */
 
-    UCXBufferCommunicator communicator;
-    communicator.initialize(argc, argv);
+    setup_topology(argc, argv);
 
-    int mpi_rank {communicator.mpi_rank};
-    int mpi_size {communicator.mpi_size};
+    /* Initialize memory pool */
 
-    communicator.setup_cache(2 * mpi_size, 100'000LL);
-    communicator.warmup_cache();
+    size_t free_memory, total_memory;
+    CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
+    const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
+
+    rmm::mr::cnmem_memory_resource mr {pool_size};
+    rmm::mr::set_default_resource(&mr);
+
+    /* Initialize communicator */
+
+    int mpi_rank;
+    int mpi_size;
+    MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
+    MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
+
+    UCXCommunicator* communicator = initialize_ucx_communicator(
+        true, 2 * mpi_size, 100'000LL
+    );
 
     /* Generate input tables */
 
@@ -116,20 +132,20 @@ int main(int argc, char *argv[])
 
     /* Distribute input tables among ranks */
 
-    auto local_left_table = distribute_table(left_view, &communicator);
-    auto local_right_table = distribute_table(right_view, &communicator);
+    auto local_left_table = distribute_table(left_view, communicator);
+    auto local_right_table = distribute_table(right_view, communicator);
 
     /* Distributed join */
 
     auto join_result = distributed_inner_join(
         local_left_table->view(), local_right_table->view(),
         {0}, {0}, {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
-        &communicator, OVER_DECOMPOSITION_FACTOR
+        communicator, OVER_DECOMPOSITION_FACTOR
     );
 
     /* Merge table from worker ranks to the root rank */
 
-    std::unique_ptr<table> merged_table = collect_tables(join_result->view(), &communicator);
+    std::unique_ptr<table> merged_table = collect_tables(join_result->view(), communicator);
 
     /* Verify Correctness */
 
@@ -153,7 +169,8 @@ int main(int argc, char *argv[])
 
     /* Cleanup */
 
-    communicator.finalize();
+    communicator->finalize();
+    delete communicator;
 
     if (mpi_rank == 0) {
         std::cerr << "Test case \"prebuild\" passes successfully.\n";
