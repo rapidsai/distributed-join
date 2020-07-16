@@ -20,27 +20,35 @@ make -j
 `benchmark/distributed_join` accepts the following arguments.
 
 **--key-type {int32_t,int64_t}**
+
 Data type for the key columns. Default: `int64_t`.
 
 **--payload-type {int32_t,int64_t}**
+
 Data type for the payload columns. Default: `int64_t`.
 
 **--build-table-nrows [INTEGER]**
+
 Number of rows in the build table per GPU. Default: `100'000'000`.
 
 **--probe-table-nrows [INTEGER]**
+
 Number of rows in the probe table per GPU. Default: `100'000'000`.
 
 **--selectivity [FLOAT]**
+
 On average, how many rows in the probe table matches each row in the build table. Default: `0.3`.
 
 **--duplicate-build-keys**
+
 If specified, key columns of the build table are allowed to have duplicates.
 
 **--over-decomposition-factor [INTEGER]**
+
 Used for computation-communication overlap. `1` means no overlap. Default: `1`.
 
 **--use-buffer-communicator**
+
 Whether buffer communicator should be used.
 
 ## Running
