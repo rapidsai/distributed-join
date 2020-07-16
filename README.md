@@ -19,7 +19,7 @@ make -j
 
 To run on systems not needing Infiniband (e.g. single-node DGX-2):
 
-Make sure you are using `UCXCommunicator` for communication (update https://github.com/rapidsai/distributed-join/blob/master/benchmark/distributed_join.cu#L46) and then run
+Make sure you are using `UCXCommunicator` for communication (update https://github.com/rapidsai/distributed-join/blob/main/benchmark/distributed_join.cu#L46) and then run
 
 ```bash
 UCX_MEMTYPE_CACHE=n UCX_RNDV_SCHEME=get_zcopy UCX_TLS=sm,cuda_copy,cuda_ipc mpirun -n 16 --cpus-per-rank 3 benchmark/distributed_join
@@ -27,7 +27,7 @@ UCX_MEMTYPE_CACHE=n UCX_RNDV_SCHEME=get_zcopy UCX_TLS=sm,cuda_copy,cuda_ipc mpir
 
 On systems needing Infiniband communication (e.g. single or multi-node DGX-1Vs):
 
-* Make sure you are using `UCXBufferCommunicator` for reusing communication buffer (it's the default, check https://github.com/rapidsai/distributed-join/blob/master/benchmark/distributed_join.cu#L46).
+* Make sure you are using `UCXBufferCommunicator` for reusing communication buffer (it's the default, check https://github.com/rapidsai/distributed-join/blob/main/benchmark/distributed_join.cu#L46).
 * GPU-NIC affinity is critical on systems with multiple GPUs and NICs, please refer to [this page from QUDA](https://github.com/lattice/quda/wiki/Multi-GPU-Support#maximizing-gdr-performance) for more detailed info. Also, you could modify run script included in the benchmark folder.
 * Depending on whether you're running with `srun` or `mpirun`, update `run_sample.sh` to set `lrank` to `$SLURM_LOCALID` or `$OMPI_COMM_WORLD_LOCAL_RANK` correspondingly.
 
