@@ -1,5 +1,16 @@
 # Distributed Join Project
 
+## Overview
+
+This proof-of-concept repo implements the distributed repartitioned join algorithm. The algorithm consists of three steps:
+1. Hash partition: reorder input tables into buckets based on the hash values of the key columns.
+2. All-to-all communication: send buckets so that rows with the same hash values end up in the same MPI rank.
+3. Local join: each MPI rank performs local join independently.
+
+For more information about the algorithm used and optimizations, please refer to [this GTC talk](https://developer.nvidia.com/gtc/2020/video/s21482).
+
+For production-quality distributed join implementation, checkout [cuDF's Dask integration](https://rapids.ai/dask.html).
+
 ## Compilation
 
 This project depends on CUDA, UCX, MPI and cuDF.
