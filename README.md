@@ -17,17 +17,30 @@ make -j
 
 ## Running
 
+### Command line arguments
+
+`benchmark/distributed_join` accepts the following arguments.
+
+| Command line arguments | Explanation |
+| ---------------------- | ----------- |
+| --key-type {int32_t,int64_t} | Data type for the key columns. Default: `int64_t`. |
+| --payload-type {int32_t,int64_t} | Data type for the payload columns. Default: `int64_t`. |
+| --build-table-nrows [INTEGER] | Number of rows in the build table per GPU. Default: `100'000'000`. |
+| --probe-table-nrows [INTEGER] | Number of rows in the probe table per GPU. Default: `100'000'000`. |
+| --selectivity [FLOAT] | On average, how many rows in the probe table matches each row in the build table. Default: `0.3`. |
+| --duplicate-build-keys | If specified, key columns of the build table are allowed to have duplicates. |
+| --over-decomposition-factor [INTEGER] | Used for computation-communication overlap. `1` means no overlap. Default: `1`. |
+| --use-buffer-communicator | Whether buffer communicator should be used.
+
 To run on systems not needing Infiniband (e.g. single-node DGX-2):
 
-Make sure you are using `UCXCommunicator` for communication (update https://github.com/rapidsai/distributed-join/blob/master/benchmark/distributed_join.cu#L46) and then run
-
 ```bash
-UCX_MEMTYPE_CACHE=n UCX_RNDV_SCHEME=get_zcopy UCX_TLS=sm,cuda_copy,cuda_ipc mpirun -n 16 --cpus-per-rank 3 benchmark/distributed_join
+UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc mpirun -n 16 --cpus-per-rank 3 benchmark/distributed_join
 ```
 
 On systems needing Infiniband communication (e.g. single or multi-node DGX-1Vs):
 
-* Make sure you are using `UCXBufferCommunicator` for reusing communication buffer (it's the default, check https://github.com/rapidsai/distributed-join/blob/master/benchmark/distributed_join.cu#L46).
+* Make sure you are using `--use-buffer-communicator` for reusing communication buffer.
 * GPU-NIC affinity is critical on systems with multiple GPUs and NICs, please refer to [this page from QUDA](https://github.com/lattice/quda/wiki/Multi-GPU-Support#maximizing-gdr-performance) for more detailed info. Also, you could modify run script included in the benchmark folder.
 * Depending on whether you're running with `srun` or `mpirun`, update `run_sample.sh` to set `lrank` to `$SLURM_LOCALID` or `$OMPI_COMM_WORLD_LOCAL_RANK` correspondingly.
 
@@ -39,32 +52,36 @@ rank 1 gpu list 0,1,2,3,4,5,6,7 cpu bind 5-8 ndev mlx5_0:1
 rank 2 gpu list 0,1,2,3,4,5,6,7 cpu bind 10-13 ndev mlx5_1:1
 rank 3 gpu list 0,1,2,3,4,5,6,7 cpu bind 15-18 ndev mlx5_1:1
 rank 4 gpu list 0,1,2,3,4,5,6,7 cpu bind 21-24 ndev mlx5_2:1
-rank 5 gpu list 0,1,2,3,4,5,6,7 cpu bind 25-28 ndev mlx5_2:1
 rank 6 gpu list 0,1,2,3,4,5,6,7 cpu bind 30-33 ndev mlx5_3:1
 rank 7 gpu list 0,1,2,3,4,5,6,7 cpu bind 35-38 ndev mlx5_3:1
-Device count: 8
-Rank 2 select 2/8 GPU
-Device count: 8
-Rank 3 select 3/8 GPU
-Device count: 8
-Rank 1 select 1/8 GPU
-Device count: 8
-Rank 0 select 0/8 GPU
-Device count: 8
-Rank 7 select 7/8 GPU
+rank 5 gpu list 0,1,2,3,4,5,6,7 cpu bind 25-28 ndev mlx5_2:1
 Device count: 8
 Rank 4 select 4/8 GPU
 Device count: 8
 Rank 5 select 5/8 GPU
 Device count: 8
+Rank 3 select 3/8 GPU
+Device count: 8
+Rank 7 select 7/8 GPU
+Device count: 8
+Rank 0 select 0/8 GPU
+Device count: 8
+Rank 1 select 1/8 GPU
+Device count: 8
+Rank 2 select 2/8 GPU
+Device count: 8
 Rank 6 select 6/8 GPU
-Elasped time (s) 0.490553
-```
-
-Example run on multiple DGX-1Vs:
-
-```bash
-srun --time=0:30:00 --nodes=4 --ntasks-per-node=8 benchmark/run.py
+========== Parameters ==========
+Key type: int64_t
+Payload type: int64_t
+Number of rows in the build table: 800 million
+Number of rows in the probe table: 800 million
+Selectivity: 0.3
+Keys in build table are unique: true
+Over-decomposition factor: 1
+Buffer communicator: true
+================================
+Elasped time (s) 0.431553
 ```
 
 ## File Structure
