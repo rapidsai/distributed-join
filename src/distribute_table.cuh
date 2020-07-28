@@ -34,7 +34,7 @@
  * Helper function for calculating the number of rows of a local table.
  *
  * This function is useful, for example, for calculating the size on root and allocating receive
- * buffer on workers when distributing tables from root node to worker nodes. This function mainly
+ * buffer on workers when distributing tables from root rank to worker ranks. This function mainly
  * solves the problem when the number of ranks does not divide the number of rows in the global
  * table.
  *
@@ -79,16 +79,14 @@ distribute_cols(
     int mpi_rank {communicator->mpi_rank};
     int mpi_size {communicator->mpi_size};
 
-    std::vector<comm_handle_t> requests;
     std::size_t dtype_size = cudf::size_of(local_col.type());
 
+    communicator->start();
+
     if (mpi_rank == 0) {
-        // master node
+        // Send global_col from the root rank to each worker rank
 
         cudf::size_type global_size = global_col.size();
-        requests.resize(mpi_size);
-
-        // Send global_col to each slave node
 
         for (cudf::size_type irank = 1; irank < mpi_size; irank++) {
             cudf::size_type start_idx = std::min<cudf::size_type>(irank, global_size % mpi_size)
@@ -96,12 +94,10 @@ distribute_cols(
             cudf::size_type irank_size = get_local_table_size(global_size, irank, mpi_size);
             void *start_addr = (void *)(global_col.head<char>() + start_idx * dtype_size);
 
-            requests[irank] = communicator->send(
-                start_addr, irank_size, dtype_size, irank, distribute_col_tag
-            );
+            communicator->send(start_addr, irank_size, dtype_size, irank);
         }
 
-        // Fill master node's local_col
+        // Fill the root rank's local_col
 
         cudf::size_type rank0_size = get_local_table_size(global_size, 0, mpi_size);
 
@@ -110,17 +106,12 @@ distribute_cols(
             cudaMemcpyDeviceToDevice
         ));
 
-        communicator->waitall(requests);
-
     } else {
-        // slave node
-
-        comm_handle_t request = communicator->recv(
-            local_col.head(), local_col.size(), dtype_size, 0, distribute_col_tag
-        );
-
-        communicator->wait(request);
+        // worker rank
+        communicator->recv(local_col.head(), local_col.size(), dtype_size, 0);
     }
+
+    communicator->stop();
 }
 
 
@@ -177,7 +168,7 @@ distribute_table(
         MPI_Bcast(&columns_dtype[icol], sizeof(cudf::size_type), MPI_CHAR, 0, MPI_COMM_WORLD);
     }
 
-    /* Allocate local tables across nodes */
+    /* Allocate local tables across ranks */
 
     cudf::size_type local_table_size = get_local_table_size(global_table_size, mpi_rank, mpi_size);
 
@@ -188,7 +179,7 @@ distribute_table(
         local_table.push_back(std::move(new_column));
     }
 
-    /* Send table from root to all nodes */
+    /* Send table from the root rank to all ranks */
 
     for (int icol = 0; icol < ncols; icol++) {
         cudf::column_view global_col;
@@ -261,34 +252,25 @@ collect_tables(
 
         std::size_t dtype_size = cudf::size_of(table.column(icol).type());
 
+        communicator->start();
+
         if (mpi_rank == 0) {
-
-            std::vector<comm_handle_t> requests(mpi_size, nullptr);
-
             for (int irank = 1; irank < mpi_size; irank++) {
                 void *start_addr = (void *)(merged_columns[icol]->mutable_view().head<char>()
                                             + table_nrows_scan[irank] * dtype_size);
 
-                requests[irank] = communicator->recv(
-                    start_addr, table_nrows[irank], dtype_size, irank, collect_table_tag
-                );
+                communicator->recv(start_addr, table_nrows[irank], dtype_size, irank);
             }
 
             CUDA_RT_CALL(cudaMemcpy(
                 merged_columns[icol]->mutable_view().head(), table.column(icol).head(),
                 table_nrows[0] * dtype_size, cudaMemcpyDeviceToDevice)
             );
-
-            communicator->waitall(requests);
-
         } else {
-
-            comm_handle_t request = communicator->send(
-                table.column(icol).head(), nrows, dtype_size, 0, collect_table_tag
-            );
-
-            communicator->wait(request);
+            communicator->send(table.column(icol).head(), nrows, dtype_size, 0);
         }
+
+        communicator->stop();
     }
 
     if (mpi_rank == 0) {

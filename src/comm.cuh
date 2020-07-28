@@ -66,17 +66,17 @@ MPI_Datatype mpi_dtype_from_c_type()
 /**
  * Send data from the current rank to other ranks according to offset.
  *
+ * Note: This call should be enclosed by communicator->start() and communicator->stop().
+ *
  * @param[in] data                The starting address of data to be sent in device buffer.
  * @param[in] offset              Vector of length mpi_size + 1. Items in *data* with indicies from offset[i] to
  *                                offset[i+1] will be sent to rank i.
  * @param[in] item_size           The size of each item.
  * @param[in] communicator        An instance of 'Communicator' used for communication.
  * @param[in] self_send           Whether sending data to itself. If this argument is false, items in *data* destined for the
- *                                current rank will not be copied, and nullptr is returned as handle.
- * @returns                       A vector holding the handles of all aysnc requests. See 'wait' and 'waitall' in
- *                                'Communicator'.
+ *                                current rank will not be copied.
  */
-std::vector<comm_handle_t>
+void
 send_data_by_offset(
     const void *data,
     std::vector<int> const& offset,
@@ -86,8 +86,6 @@ send_data_by_offset(
 {
     int mpi_rank {communicator->mpi_rank};
     int mpi_size {communicator->mpi_size};
-
-    std::vector<comm_handle_t> requests(mpi_size, nullptr);
 
     for (int itarget_rank = 0; itarget_rank < mpi_size; itarget_rank++) {
         if (!self_send && itarget_rank == mpi_rank)
@@ -99,18 +97,16 @@ send_data_by_offset(
         // calculate the starting address
         const void *start_addr = (void *)((char *)data + offset[itarget_rank] * item_size);
 
-        // send buffer to the target node
-        requests[itarget_rank] = communicator->send(
-            start_addr, count, item_size, itarget_rank, offset_tag
-        );
+        // send buffer to the target rank
+        communicator->send(start_addr, count, item_size, itarget_rank);
     }
-
-    return requests;
 }
 
 
 /**
  * Receive the data sent from 'send_data_by_offset'.
+ *
+ * Note: This call should be enclosed by communicator->start() and communicator->stop().
  *
  * @param[out] data         The data received from each rank. This argument does not need to be preallocated, but the
  *                          caller is responsible for freeing this buffer using RMM_FREE. See
@@ -120,10 +116,8 @@ send_data_by_offset(
  * @param[in] communicator  An instance of 'Communicator' used for communication.
  * @param[in] self_recv     Whether recving data from itself. If this argument is false, data[mpi_rank] will be nullptr
  *                          and bucket_count[mpi_rank] will be 0.
- * @returns                 A vector holding the handles of all aysnc requests. See 'wait' and 'waitall' in
- *                          'Communicator'.
  */
-std::vector<comm_handle_t>
+void
 recv_data_by_offset(
     std::vector<void *> &data,
     std::vector<int64_t> &count,
@@ -137,18 +131,12 @@ recv_data_by_offset(
     data.resize(mpi_size, nullptr);
     count.resize(mpi_size, 0);
 
-    std::vector<comm_handle_t> requests(mpi_size, nullptr);
-
     for (int isource_rank = 0; isource_rank < mpi_size; isource_rank++) {
         if (!self_recv && mpi_rank == isource_rank)
             continue;
 
-        requests[isource_rank] = communicator->recv(
-            &data[isource_rank], &count[isource_rank], item_size, isource_rank, offset_tag
-        );
+        communicator->recv(&data[isource_rank], &count[isource_rank], item_size, isource_rank);
     }
-
-    return requests;
 }
 
 
@@ -163,8 +151,8 @@ recv_data_by_offset(
  * @param[in] item_size            The size of each element.
  * @param[out] total_count         The number of elements in the merged buffer returned from this function. It is the
  *                                 sum of bucket_count.
- * @returns                        Merged device buffer. The user of this function is responsible for freeing this
- *                                 returned buffer using RMM_FREE.
+ *
+ * @returns                        Merged device buffer.
  */
 rmm::device_buffer
 merge_free_received_offset(

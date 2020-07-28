@@ -27,6 +27,42 @@
 #include "error.cuh"
 
 
+void MPILikeCommunicator::start()
+{
+    pending_requests.clear();
+}
+
+
+void MPILikeCommunicator::stop()
+{
+    waitall(pending_requests);
+}
+
+
+void MPILikeCommunicator::send(const void *buf, int64_t count, int element_size, int dest)
+{
+    pending_requests.push_back(
+        send(buf, count, element_size, dest, -1)
+    );
+}
+
+
+void MPILikeCommunicator::recv(void *buf, int64_t count, int element_size, int source)
+{
+    pending_requests.push_back(
+        recv(buf, count, element_size, source, -1)
+    );
+}
+
+
+void MPILikeCommunicator::recv(void **buf, int64_t *count, int element_size, int source)
+{
+    pending_requests.push_back(
+        recv(buf, count, element_size, source, -1)
+    );
+}
+
+
 void UCXCommunicator::initialize_ucx()
 {
     MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
@@ -59,7 +95,7 @@ void UCXCommunicator::initialize_ucx()
 
 void UCXCommunicator::create_endpoints()
 {
-    /* Broadcast worker addresses to all nodes */
+    /* Broadcast worker addresses to all ranks */
 
     void *ucp_worker_address_book = malloc(ucp_worker_address_len * mpi_size);
     MPI_CALL(MPI_Allgather(
@@ -67,7 +103,7 @@ void UCXCommunicator::create_endpoints()
         ucp_worker_address_book, ucp_worker_address_len, MPI_CHAR, MPI_COMM_WORLD
     ));
 
-    /* Create endpoints of all nodes */
+    /* Create endpoints on all ranks */
 
     std::vector<ucp_ep_params_t> ucp_ep_params;
 

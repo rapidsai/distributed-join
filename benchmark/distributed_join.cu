@@ -151,7 +151,7 @@ int main(int argc, char *argv[])
         USE_BUFFER_COMMUNICATOR, 2 * mpi_size, 800'000'000LL / mpi_size - 100'000LL
     );
 
-    /* Generate build table and probe table on each node */
+    /* Generate build table and probe table on each rank */
 
     std::unique_ptr<cudf::table> left;
     std::unique_ptr<cudf::table> right;

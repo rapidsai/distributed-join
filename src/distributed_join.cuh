@@ -93,12 +93,14 @@ all_to_all_comm(
     for (cudf::size_type icol = 0; icol < hashed.num_columns(); icol++) {
         cudf::size_type dtype_size = cudf::size_of(hashed.column(icol).type());
 
+        communicator->start();
+
         // commuicate with other ranks
-        vector<comm_handle_t> send_requests = send_data_by_offset(
+        send_data_by_offset(
             hashed.column(icol).head(), offset, dtype_size, communicator, false
         );
 
-        vector<comm_handle_t> recv_requests = recv_data_by_offset(
+        recv_data_by_offset(
             local_buckets[icol], bucket_count[icol], dtype_size, communicator, false
         );
 
@@ -108,8 +110,7 @@ all_to_all_comm(
                                                  + offset[mpi_rank] * dtype_size);
         bucket_count[icol][mpi_rank] = offset[mpi_rank + 1] - offset[mpi_rank];
 
-        communicator->waitall(send_requests);
-        communicator->waitall(recv_requests);
+        communicator->stop();
     }
 }
 
@@ -172,19 +173,16 @@ all_to_all_comm_single_batch(
 
         std::size_t dtype_size = cudf::size_of(input.column(icol).type());
 
-        vector<comm_handle_t> send_requests = send_data_by_offset(
-            input.column(icol).head(), offset, dtype_size, communicator
-        );
+        communicator->start();
+
+        send_data_by_offset(input.column(icol).head(), offset, dtype_size, communicator);
 
         vector<void *> recv_data;
         vector<int64_t> count;
 
-        vector<comm_handle_t> recv_requests = recv_data_by_offset(
-            recv_data, count, dtype_size, communicator
-        );
+        recv_data_by_offset(recv_data, count, dtype_size, communicator);
 
-        communicator->waitall(send_requests);
-        communicator->waitall(recv_requests);
+        communicator->stop();
 
         int64_t nrows;
         rmm::device_buffer merged_data = merge_free_received_offset(
