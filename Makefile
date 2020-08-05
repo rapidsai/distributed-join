@@ -1,16 +1,18 @@
 CC=${CUDA_HOME}/bin/nvcc
 
 CUDF_CFLAGS=-I${CUDF_HOME}/include -I${THIRD_PARTY_HOME}/include -I${CUB_HOME}
-CUDF_LIBS=-L${CUDF_HOME}/lib -lcudf -lrmm
+CUDF_LIBS=-L${CUDF_HOME}/lib -Xlinker=-rpath,${CUDF_HOME}/lib -lcudf -lrmm
 MPI_CFLAGS=-I${MPI_HOME}/include
 MPI_LIBS=-L${MPI_HOME}/lib -lmpi
 UCX_CFLAGS=`pkg-config --cflags ucx`
 UCX_LIBS=`pkg-config --libs ucx`
 CUDA_CFLAGS=-I${CUDA_HOME}/include -arch=sm_70 --expt-extended-lambda --default-stream per-thread
 CUDA_LIBS=-L${CUDA_HOME}/lib64 -lcuda -lcudart
+NCCL_CFLAGS=-I${NCCL_HOME}/include
+NCCL_LIBS=-L${NCCL_HOME}/lib -lnccl
 
-CFLAGS=-g -std=c++14 ${MPI_CFLAGS} ${CUDA_CFLAGS} ${UCX_CFLAGS} ${CUDF_CFLAGS}
-LDFLAGS=${MPI_LIBS} ${CUDA_LIBS} ${UCX_LIBS} ${CUDF_LIBS}
+CFLAGS=-g -std=c++14 ${NCCL_CFLAGS} ${MPI_CFLAGS} ${CUDA_CFLAGS} ${UCX_CFLAGS} ${CUDF_CFLAGS}
+LDFLAGS=${NCCL_LIBS} ${MPI_LIBS} ${CUDA_LIBS} ${UCX_LIBS} ${CUDF_LIBS}
 
 generate_dataset=generate_dataset/generate_dataset.cuh generate_dataset/nvtx_helper.cuh
 src=src/comm.cuh src/error.cuh src/distribute_table.cuh src/distributed_join.cuh src/generate_table.cuh src/communicator.o

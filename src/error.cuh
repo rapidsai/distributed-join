@@ -58,6 +58,18 @@
 #endif
 
 
+#ifndef NCCL_CALL
+#define NCCL_CALL(call)                                                                            \
+{                                                                                                  \
+    ncclResult_t status = call;                                                                    \
+    if (ncclSuccess != status) {                                                                   \
+        fprintf(stderr, "ERROR: nccl call \"%s\" in line %d of file %s failed with %s.\n",         \
+                        #call, __LINE__, __FILE__, ncclGetErrorString(status));                    \
+    }                                                                                              \
+}
+#endif
+
+
 #define CHECK_ERROR(rtv, expected_value, msg)                                            \
 {                                                                                        \
     if (rtv != expected_value) {                                                         \

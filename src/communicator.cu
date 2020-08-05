@@ -27,6 +27,21 @@
 #include "error.cuh"
 
 
+void Communicator::initialize()
+{
+    MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
+    MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
+    CUDA_RT_CALL( cudaGetDevice(&current_device) );
+    comm_stream = 0;
+}
+
+
+void MPILikeCommunicator::initialize()
+{
+    Communicator::initialize();
+}
+
+
 void MPILikeCommunicator::start()
 {
     pending_requests.clear();
@@ -55,20 +70,8 @@ void MPILikeCommunicator::recv(void *buf, int64_t count, int element_size, int s
 }
 
 
-void MPILikeCommunicator::recv(void **buf, int64_t *count, int element_size, int source)
-{
-    pending_requests.push_back(
-        recv(buf, count, element_size, source, -1)
-    );
-}
-
-
 void UCXCommunicator::initialize_ucx()
 {
-    MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
-    MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
-    CUDA_RT_CALL( cudaGetDevice(&current_device) );
-
     ucp_params_t        ucp_params;
     ucp_config_t        *ucp_config;
     ucp_worker_params_t ucp_worker_params;
@@ -126,6 +129,7 @@ void UCXCommunicator::create_endpoints()
 
 void UCXCommunicator::initialize()
 {
+    MPILikeCommunicator::initialize();
     initialize_ucx();
     create_endpoints();
 }
@@ -289,12 +293,8 @@ static void request_init(void *request)
 
 void UCXBufferCommunicator::initialize_ucx()
 {
-    // Note: This initialization is different from UCXCommunicator on requesting reserved space in the communication
-    // handle.
-
-    MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
-    MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
-    CUDA_RT_CALL( cudaGetDevice(&current_device) );
+    // Note: This initialization is different from UCXCommunicator on requesting reserved space in
+    // the communication handle.
 
     ucp_params_t        ucp_params;
     ucp_config_t        *ucp_config;
@@ -807,4 +807,50 @@ UCXCommunicator* initialize_ucx_communicator(bool use_buffer_communicator,
         communicator->initialize();
         return communicator;
     }
+}
+
+
+void NCCLCommunicator::initialize()
+{
+    Communicator::initialize();
+
+    ncclUniqueId nccl_id;
+    if (mpi_rank == 0)
+        NCCL_CALL( ncclGetUniqueId(&nccl_id) );
+    MPI_CALL( MPI_Bcast(&nccl_id, sizeof(nccl_id), MPI_BYTE, 0, MPI_COMM_WORLD) );
+    NCCL_CALL( ncclCommInitRank(&nccl_comm, mpi_size, nccl_id, mpi_rank) );
+
+    CUDA_RT_CALL( cudaStreamCreate(&comm_stream) );
+}
+
+
+void NCCLCommunicator::start()
+{
+    NCCL_CALL( ncclGroupStart() );
+}
+
+
+void NCCLCommunicator::send(const void *buf, int64_t count, int element_size, int dest)
+{
+    NCCL_CALL( ncclSend(buf, count * element_size, ncclChar, dest, nccl_comm, comm_stream) );
+}
+
+
+void NCCLCommunicator::recv(void *buf, int64_t count, int element_size, int source)
+{
+    NCCL_CALL( ncclRecv(buf, count * element_size, ncclChar, source, nccl_comm, comm_stream) );
+}
+
+
+void NCCLCommunicator::stop()
+{
+    NCCL_CALL( ncclGroupEnd() );
+    CUDA_RT_CALL( cudaStreamSynchronize(comm_stream) );
+}
+
+
+void NCCLCommunicator::finalize()
+{
+    CUDA_RT_CALL( cudaStreamDestroy(comm_stream) );
+    NCCL_CALL( ncclCommDestroy(nccl_comm) );
 }

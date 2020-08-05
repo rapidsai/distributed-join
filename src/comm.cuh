@@ -33,9 +33,7 @@
 enum COMM_TAGS
 {
     placeholder_tag,
-    offset_tag,
-    distribute_col_tag,
-    collect_table_tag
+    exchange_size_tag
 };
 
 
@@ -111,7 +109,7 @@ send_data_by_offset(
  * @param[out] data         The data received from each rank. This argument does not need to be preallocated, but the
  *                          caller is responsible for freeing this buffer using RMM_FREE. See
  *                          'merge_free_received_offset'.
- * @param[out] count        The number of items received from each rank.
+ * @param[in] count         The number of items to be received from each rank.
  * @param[in] item_size     The size of each item. Used for passing to receive function in UCX.
  * @param[in] communicator  An instance of 'Communicator' used for communication.
  * @param[in] self_recv     Whether recving data from itself. If this argument is false, data[mpi_rank] will be nullptr
@@ -129,13 +127,15 @@ recv_data_by_offset(
     int mpi_size {communicator->mpi_size};
 
     data.resize(mpi_size, nullptr);
-    count.resize(mpi_size, 0);
 
     for (int isource_rank = 0; isource_rank < mpi_size; isource_rank++) {
         if (!self_recv && mpi_rank == isource_rank)
             continue;
 
-        communicator->recv(&data[isource_rank], &count[isource_rank], item_size, isource_rank);
+        data[isource_rank] = rmm::mr::get_default_resource()->allocate(
+            count[isource_rank]*item_size, communicator->comm_stream
+        );
+        communicator->recv(data[isource_rank], count[isource_rank], item_size, isource_rank);
     }
 }
 
@@ -160,7 +160,7 @@ merge_free_received_offset(
     std::vector<int64_t> const& bucket_count,
     size_t item_size,
     int64_t &total_count,
-    Communicator *communicator=nullptr,
+    Communicator *communicator,
     bool self_free=true)
 {
     total_count = 0LL;

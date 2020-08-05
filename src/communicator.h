@@ -21,6 +21,7 @@
 #include <ucp/api/ucp.h>
 #include <mpi.h>
 #include <cstdint>
+#include <nccl.h>
 
 
 #define comm_handle_t void*
@@ -60,7 +61,7 @@ virtual void stop() = 0;
 virtual void send(const void *buf, int64_t count, int element_size, int dest) = 0;
 
 /**
- * Receive data from a remote rank. Use this version if the receive size is known.
+ * Receive data from a remote rank.
  *
  * @param[in] buf           Receive buffer to place received data into
  * @param[in] count         Number of elements to receive
@@ -70,16 +71,6 @@ virtual void send(const void *buf, int64_t count, int element_size, int dest) = 
 virtual void recv(void *buf, int64_t count, int element_size, int source) = 0;
 
 /**
- * Receive data from a remote rank. Use this version if the receive size is unknown.
- *
- * @param[out] buf          Allocated receive buffer. It is the caller's responsibility to free this buffer.
- * @param[out] count        Number of elements received
- * @param[in] element_size  The size of each element
- * @param[in] source        Source rank
- */
-virtual void recv(void **buf, int64_t *count, int element_size, int source) = 0;
-
-/**
  * Close the endpoints, free up used communication resources, and stop the communication runtime.
  */
 virtual void finalize() = 0;
@@ -87,11 +78,9 @@ virtual void finalize() = 0;
 int mpi_rank;
 int mpi_size;
 int current_device;
+cudaStream_t comm_stream;
 
 };
-
-
-class NCCLCommunicator : public Communicator {};
 
 
 class MPILikeCommunicator : public Communicator
@@ -102,7 +91,7 @@ class MPILikeCommunicator : public Communicator
 
 public:
 
-virtual void initialize() = 0;
+virtual void initialize();
 
 virtual void start();
 
@@ -137,8 +126,6 @@ virtual void recv(void *buf, int64_t count, int element_size, int source);
  * @returns                 Communication handle for waiting. See 'wait' and 'waitall'.
  */
 virtual comm_handle_t recv(void *buf, int64_t count, int element_size, int source, int tag) = 0;
-
-virtual void recv(void **buf, int64_t *count, int element_size, int source);
 
 /**
  * Receive data from a remote rank asynchronously. Use this version if the receive size is unknown.
@@ -325,3 +312,24 @@ UCXCommunicator* initialize_ucx_communicator(bool use_buffer_communicator,
                                              int num_comm_buffers,
                                              int64_t comm_buffer_size);
 
+
+class NCCLCommunicator : public Communicator
+{
+
+public:
+
+virtual void initialize();
+
+virtual void start();
+
+virtual void stop();
+
+virtual void send(const void *buf, int64_t count, int element_size, int dest);
+
+virtual void recv(void *buf, int64_t count, int element_size, int source);
+
+virtual void finalize();
+
+ncclComm_t nccl_comm;
+
+};
