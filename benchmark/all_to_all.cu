@@ -21,27 +21,43 @@
 #include <cstdint>
 #include <rmm/mr/device/default_memory_resource.hpp>
 #include <rmm/mr/device/device_memory_resource.hpp>
+#include <rmm/mr/device/cnmem_memory_resource.hpp>
 
+#include "../src/topology.cuh"
 #include "../src/communicator.h"
 #include "../src/error.cuh"
 
-static constexpr int64_t SIZE = 800'000'000LL;
-static constexpr int64_t BUFFER_SIZE = 25'000'000LL;
-static constexpr int REPEAT = 4;
-static constexpr bool WARM_UP = false;
+static int64_t SIZE = 800'000'000LL;
+static int64_t BUFFER_SIZE = 25'000'000LL;
+static int REPEAT = 4;
+static bool WARM_UP = false;
+static bool USE_BUFFER_COMMUNICATOR = true;
 
 int main(int argc, char *argv[])
 {
-    UCXBufferCommunicator communicator;
-    communicator.initialize(argc, argv);
+    /* Initialize topology */
 
-    int mpi_rank = communicator.mpi_rank;
-    int mpi_size = communicator.mpi_size;
+    setup_topology(argc, argv);
 
-    communicator.setup_cache(2 * mpi_size, BUFFER_SIZE);
-    communicator.warmup_cache();
+    /* Initialize memory pool */
 
-    auto mr = rmm::mr::get_default_resource();
+    size_t free_memory, total_memory;
+    CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
+    const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
+
+    rmm::mr::cnmem_memory_resource mr {pool_size};
+    rmm::mr::set_default_resource(&mr);
+
+    /* Initialize communicator */
+
+    int mpi_rank;
+    int mpi_size;
+    MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
+    MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
+
+    UCXCommunicator* communicator = initialize_ucx_communicator(
+        USE_BUFFER_COMMUNICATOR, 2 * mpi_size, BUFFER_SIZE
+    );
 
     /* Warmup if necessary */
 
@@ -51,7 +67,7 @@ int main(int argc, char *argv[])
         std::vector<void *> warmup_recv_buffer(mpi_size, nullptr);
 
         for (int irank = 0; irank < mpi_size; irank ++) {
-            warmup_send_buffer[irank] = mr->allocate(WARMUP_BUFFER_SIZE, 0);
+            warmup_send_buffer[irank] = mr.allocate(WARMUP_BUFFER_SIZE, 0);
         }
 
         std::vector<comm_handle_t> warmup_send_reqs(mpi_size, nullptr);
@@ -59,7 +75,7 @@ int main(int argc, char *argv[])
 
         for (int irank = 0; irank < mpi_size; irank++) {
             if (irank != mpi_rank) {
-                warmup_send_reqs[irank] = communicator.send(
+                warmup_send_reqs[irank] = communicator->send(
                     warmup_send_buffer[irank], WARMUP_BUFFER_SIZE, 1, irank, 10
                 );
             } else {
@@ -69,7 +85,7 @@ int main(int argc, char *argv[])
 
         for (int irank = 0; irank < mpi_size; irank++) {
             if (irank != mpi_rank) {
-                warmup_recv_reqs[irank] = communicator.recv(
+                warmup_recv_reqs[irank] = communicator->recv(
                     &warmup_recv_buffer[irank], nullptr, 1, irank, 10
                 );
             } else {
@@ -77,12 +93,12 @@ int main(int argc, char *argv[])
             }
         }
 
-        communicator.waitall(warmup_send_reqs);
-        communicator.waitall(warmup_recv_reqs);
+        communicator->waitall(warmup_send_reqs);
+        communicator->waitall(warmup_recv_reqs);
 
         for (int irank = 0; irank < mpi_rank; irank ++) {
-            mr->deallocate(warmup_send_buffer[irank], 0, 0);
-            mr->deallocate(warmup_recv_buffer[irank], 0, 0);
+            mr.deallocate(warmup_send_buffer[irank], 0, 0);
+            mr.deallocate(warmup_recv_buffer[irank], 0, 0);
         }
     }
 
@@ -92,7 +108,7 @@ int main(int argc, char *argv[])
     std::vector<void *> recv_buffer(mpi_size, nullptr);
 
     for (int irank = 0; irank < mpi_size; irank ++) {
-        send_buffer[irank] = mr->allocate(SIZE / mpi_size, 0);
+        send_buffer[irank] = mr.allocate(SIZE / mpi_size, 0);
     }
 
     std::vector<comm_handle_t> send_reqs(mpi_size, nullptr);
@@ -100,7 +116,7 @@ int main(int argc, char *argv[])
 
     /* Communication */
 
-    UCX_CALL(ucp_worker_flush(communicator.ucp_worker));
+    UCX_CALL(ucp_worker_flush(communicator->ucp_worker));
     MPI_Barrier(MPI_COMM_WORLD);
     cudaProfilerStart();
     double start = MPI_Wtime();
@@ -109,23 +125,23 @@ int main(int argc, char *argv[])
     {
         for (int irank = 0; irank < mpi_size; irank++) {
             if (irank != mpi_rank)
-                send_reqs[irank] = communicator.send(send_buffer[irank], SIZE / mpi_size, 1, irank, 20);
+                send_reqs[irank] = communicator->send(send_buffer[irank], SIZE / mpi_size, 1, irank, 20);
             else
                 send_reqs[irank] = nullptr;
         }
 
         for (int irank = 0; irank < mpi_size; irank++) {
             if (irank != mpi_rank)
-                recv_reqs[irank] = communicator.recv(&recv_buffer[irank], nullptr, 1, irank, 20);
+                recv_reqs[irank] = communicator->recv(&recv_buffer[irank], nullptr, 1, irank, 20);
             else
                 recv_reqs[irank] = nullptr;
         }
 
-        communicator.waitall(send_reqs);
-        communicator.waitall(recv_reqs);
+        communicator->waitall(send_reqs);
+        communicator->waitall(recv_reqs);
 
         for (int irank = 0; irank < mpi_rank; irank ++)
-            mr->deallocate(recv_buffer[irank], 0, 0);
+            mr.deallocate(recv_buffer[irank], 0, 0);
     }
 
     double stop = MPI_Wtime();
@@ -140,9 +156,11 @@ int main(int argc, char *argv[])
     /* Cleanup */
 
     for(int irank = 0; irank < mpi_rank; irank++) {
-        mr->deallocate(send_buffer[irank], 0, 0);
+        mr.deallocate(send_buffer[irank], 0, 0);
     }
 
-    communicator.finalize();
+    communicator->finalize();
+    delete communicator;
+
     return 0;
 }

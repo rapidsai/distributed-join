@@ -21,13 +21,18 @@
 #include <utility>
 #include <tuple>
 #include <cstdint>
+#include <cstring>
+#include <cstdlib>
 
 #include <mpi.h>
 #include <cuda_profiler_api.h>
 
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
+#include <rmm/mr/device/default_memory_resource.hpp>
+#include <rmm/mr/device/cnmem_memory_resource.hpp>
 
+#include "../src/topology.cuh"
 #include "../src/communicator.h"
 #include "../src/error.cuh"
 #include "../src/generate_table.cuh"
@@ -36,26 +41,40 @@
 #define KEY_T int64_t
 #define PAYLOAD_T int64_t
 
-static constexpr cudf::size_type BUILD_TABLE_NROWS_EACH_RANK = 100'000'000;
-static constexpr cudf::size_type PROBE_TABLE_NROWS_EACH_RANK = 100'000'000;
-static constexpr double SELECTIVITY = 0.3;
-static constexpr KEY_T RAND_MAX_VAL = 200'000'000;
-static constexpr bool IS_BUILD_TABLE_KEY_UNIQUE = true;
-static constexpr int OVER_DECOMPOSITION_FACTOR = 1;
+static cudf::size_type BUILD_TABLE_NROWS_EACH_RANK = 100'000'000;
+static cudf::size_type PROBE_TABLE_NROWS_EACH_RANK = 100'000'000;
+static double SELECTIVITY = 0.3;
+static KEY_T RAND_MAX_VAL = 200'000'000;
+static bool IS_BUILD_TABLE_KEY_UNIQUE = true;
+static int OVER_DECOMPOSITION_FACTOR = 1;
+static bool USE_BUFFER_COMMUNICATOR = false;
 
 
 int main(int argc, char *argv[])
 {
-    /* Initialize communication */
+    /* Initialize topology */
 
-    UCXBufferCommunicator communicator;
-    communicator.initialize(argc, argv);
+    setup_topology(argc, argv);
 
-    int mpi_rank {communicator.mpi_rank};
-    int mpi_size {communicator.mpi_size};
+    /* Initialize memory pool */
 
-    communicator.setup_cache(2 * mpi_size, 800'000'000LL / mpi_size - 100'000LL);
-    communicator.warmup_cache();
+    size_t free_memory, total_memory;
+    CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
+    const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
+
+    rmm::mr::cnmem_memory_resource cnmem_mr {pool_size};
+    rmm::mr::set_default_resource(&cnmem_mr);
+
+    /* Initialize communicator */
+
+    int mpi_rank;
+    int mpi_size;
+    MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
+    MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
+
+    UCXCommunicator* communicator = initialize_ucx_communicator(
+        USE_BUFFER_COMMUNICATOR, 2 * mpi_size, 800'000'000LL / mpi_size - 100'000LL
+    );
 
     /* Generate build table and probe table on each node */
 
@@ -65,7 +84,7 @@ int main(int argc, char *argv[])
     std::tie(left, right) = generate_tables_distributed<KEY_T, PAYLOAD_T>(
         BUILD_TABLE_NROWS_EACH_RANK, PROBE_TABLE_NROWS_EACH_RANK,
         SELECTIVITY, RAND_MAX_VAL, IS_BUILD_TABLE_KEY_UNIQUE,
-        &communicator
+        communicator
     );
 
     /* Distributed join */
@@ -79,7 +98,7 @@ int main(int argc, char *argv[])
     std::unique_ptr<cudf::table> join_result = distributed_inner_join(
         left->view(), right->view(),
         {0}, {0}, {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
-        &communicator, OVER_DECOMPOSITION_FACTOR
+        communicator, OVER_DECOMPOSITION_FACTOR
     );
 
     MPI_Barrier(MPI_COMM_WORLD);
@@ -92,7 +111,8 @@ int main(int argc, char *argv[])
 
     /* Cleanup */
 
-    communicator.finalize();
+    communicator->finalize();
+    delete communicator;
 
     return 0;
 }
