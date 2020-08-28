@@ -168,6 +168,8 @@ int main(int argc, char *argv[])
             &nblocks, verify_correctness, block_size, 0
         ));
 
+        // Since the key has to be a multiple of 5, the join result size is the size of left table
+        // divided by 5.
         assert(merged_table->num_rows() == SIZE / 5);
 
         verify_correctness<<<nblocks, block_size>>>(

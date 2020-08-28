@@ -48,7 +48,8 @@ Number of rows in the probe table per GPU. Default: `100'000'000`.
 
 **--selectivity [FLOAT]**
 
-On average, how many rows in the probe table matches each row in the build table. Default: `0.3`.
+The probability (in range 0.0 - 1.0) of each probe table row has matches in the build table.
+Default: `0.3`.
 
 **--duplicate-build-keys**
 
@@ -56,11 +57,14 @@ If specified, key columns of the build table are allowed to have duplicates.
 
 **--over-decomposition-factor [INTEGER]**
 
-Used for computation-communication overlap. `1` means no overlap. Default: `1`.
+Partition the input tables into (over decomposition factor) * (number of GPUs) buckets, which is
+used for computation-communication overlap. This argument has to be an integer >= 1. Higher number
+means smaller batch size. `1` means no overlap. Default: `1`.
 
 **--use-buffer-communicator**
 
-Whether buffer communicator should be used.
+If this option is specified, communication goes through a pre-registered staging buffer. This option
+is recommeneded for IB system to reduce registration overhead.
 
 ## Running
 
