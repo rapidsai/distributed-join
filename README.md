@@ -15,11 +15,9 @@ For production-quality distributed join implementation, checkout [cuDF's Dask in
 
 This project depends on CUDA, UCX, MPI and cuDF.
 
-The Makefile uses `pkg-config` to determine the installation path of UCX, so make sure `ucx.pc` is in `PKG_CONFIG_PATH`.
+To compile, make sure the variables `CUDA_HOME`, `CUDF_HOME`, `MPI_HOME` and `UCX_HOME` are pointing to the installation path of CUDA, cuDF, MPI, and UCX repectively.
 
-To compile, make sure the variables `CUDA_HOME`, `CUDF_HOME`, `CUB_HOME`, `MPI_HOME` are pointing to the installation path of CUDA, cuDF, CUB and MPI, repectively.
-
-The variable `THIRD_PARTY_HOME` should point to [this repo](https://github.com/rapidsai/thirdparty-freestanding).
+[The wiki page](https://github.com/rapidsai/distributed-join/wiki/How-to-compile-and-run-the-code) contains step-by-step instructions for setting up the environment.
 
 To compile, run
 ```bash
