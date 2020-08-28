@@ -6,7 +6,7 @@ MPI_CFLAGS=-I${MPI_HOME}/include
 MPI_LIBS=-L${MPI_HOME}/lib -lmpi
 UCX_CFLAGS=-I${UCX_HOME}/include
 UCX_LIBS=-L${UCX_HOME}/lib -lucs -luct -lucp
-CUDA_CFLAGS=-I${CUDA_HOME}/include -I${CUB_HOME}/include -arch=sm_70 --expt-extended-lambda --default-stream per-thread
+CUDA_CFLAGS=-I${CUDA_HOME}/include -arch=sm_70 --expt-extended-lambda --default-stream per-thread
 CUDA_LIBS=-L${CUDA_HOME}/lib64 -lcuda -lcudart
 
 CFLAGS=-g -std=c++14 ${MPI_CFLAGS} ${CUDA_CFLAGS} ${UCX_CFLAGS} ${CUDF_CFLAGS}
