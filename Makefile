@@ -1,12 +1,12 @@
 CC=${CUDA_HOME}/bin/nvcc
 
-CUDF_CFLAGS=-I${CUDF_HOME}/include -I${THIRD_PARTY_HOME}/include -I${CUB_HOME}
+CUDF_CFLAGS=-I${CUDF_HOME}/include -I${CUDF_HOME}/include/libcudf/libcudacxx
 CUDF_LIBS=-L${CUDF_HOME}/lib -lcudf -lrmm
 MPI_CFLAGS=-I${MPI_HOME}/include
 MPI_LIBS=-L${MPI_HOME}/lib -lmpi
-UCX_CFLAGS=`pkg-config --cflags ucx`
-UCX_LIBS=`pkg-config --libs ucx`
-CUDA_CFLAGS=-I${CUDA_HOME}/include -arch=sm_70 --expt-extended-lambda --default-stream per-thread
+UCX_CFLAGS=-I${UCX_HOME}/include
+UCX_LIBS=-L${UCX_HOME}/lib -lucs -luct -lucp
+CUDA_CFLAGS=-I${CUDA_HOME}/include -I${CUB_HOME}/include -arch=sm_70 --expt-extended-lambda --default-stream per-thread
 CUDA_LIBS=-L${CUDA_HOME}/lib64 -lcuda -lcudart
 
 CFLAGS=-g -std=c++14 ${MPI_CFLAGS} ${CUDA_CFLAGS} ${UCX_CFLAGS} ${CUDF_CFLAGS}
