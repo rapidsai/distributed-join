@@ -31,13 +31,67 @@ static int64_t SIZE = 800'000'000LL;
 static int64_t BUFFER_SIZE = 25'000'000LL;
 static int REPEAT = 4;
 static bool WARM_UP = false;
-static bool USE_BUFFER_COMMUNICATOR = true;
+static bool USE_BUFFER_COMMUNICATOR = false;
+
+
+void parse_command_line_arguments(int argc, char *argv[])
+{
+    for (int iarg = 0; iarg < argc; iarg++) {
+        if (!strcmp(argv[iarg], "--size")) {
+            SIZE = atol(argv[iarg + 1]);
+        }
+
+        if (!strcmp(argv[iarg], "--buffer-size")) {
+            BUFFER_SIZE = atol(argv[iarg + 1]);
+        }
+
+        if (!strcmp(argv[iarg], "--repeat")) {
+            REPEAT = atoi(argv[iarg + 1]);
+        }
+
+        if (!strcmp(argv[iarg], "--warm-up")) {
+            WARM_UP = true;
+        }
+
+        if (!strcmp(argv[iarg], "--use-buffer-communicator")) {
+            USE_BUFFER_COMMUNICATOR = true;
+        }
+    }
+}
+
+
+void report_configuration()
+{
+    MPI_CALL( MPI_Barrier(MPI_COMM_WORLD) );
+
+    int mpi_rank;
+    MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
+    if (mpi_rank != 0)
+        return;
+
+    std::cout << "========== Parameters ==========" << std::endl;
+    std::cout << std::boolalpha;
+    std::cout << "Size: " << SIZE << std::endl;
+    std::cout << "Buffer communicator: " << USE_BUFFER_COMMUNICATOR << std::endl;
+    if (USE_BUFFER_COMMUNICATOR) {
+        std::cout << "Buffer size: " << BUFFER_SIZE << std::endl;
+    }
+    std::cout << "Repeat: " << REPEAT << std::endl;
+    std::cout << "Warmup: " << WARM_UP << std::endl;
+    std::cout << "================================" << std::endl;
+}
+
 
 int main(int argc, char *argv[])
 {
     /* Initialize topology */
 
     setup_topology(argc, argv);
+
+    /* Parse command line arguments */
+
+    parse_command_line_arguments(argc, argv);
+    report_configuration();
 
     /* Initialize memory pool */
 

@@ -28,7 +28,17 @@
 #include "../src/communicator.h"
 #include "../src/error.cuh"
 
-static constexpr int64_t COUNT = 50'000'000LL;
+static int64_t COUNT = 50'000'000LL;
+
+
+void parse_command_line_arguments(int argc, char *argv[])
+{
+    for (int iarg = 0; iarg < argc; iarg++) {
+        if (!strcmp(argv[iarg], "--count")) {
+            COUNT = atol(argv[iarg + 1]);
+        }
+    }
+}
 
 
 __global__ void set_data(uint64_t *start_addr, uint64_t size, uint64_t start_val)
@@ -58,6 +68,10 @@ int main(int argc, char *argv[])
     /* Initialize topology */
 
     setup_topology(argc, argv);
+
+    /* Parse command line arguments */
+
+    parse_command_line_arguments(argc, argv);
 
     /* Initialize memory pool */
 

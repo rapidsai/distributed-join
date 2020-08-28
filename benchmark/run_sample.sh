@@ -5,8 +5,8 @@ lrank=$OMPI_COMM_WORLD_LOCAL_RANK
 
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 
-#APP="benchmark/all_to_all"
-APP="benchmark/distributed_join"
+# APP="benchmark/all_to_all --use-buffer-communicator --warm-up --repeat 1"
+APP="benchmark/distributed_join --use-buffer-communicator"
 
 # this is the list of GPUs we have
 GPUS=(0 1 2 3 4 5 6 7)
@@ -35,7 +35,7 @@ export UCX_WARN_UNUSED_ENV_VARS=n
 #export UCX_IB_GPU_DIRECT_RDMA=no
 #export UCX_IB_REG_METHODS=rcache
 #export UCX_RNDV_THRESH=8192
-#export UCX_RNDV_SCHEME=put_zcopy
+export UCX_RNDV_SCHEME=put_zcopy
 
 echo "rank" $lrank "gpu list" $CUDA_VISIBLE_DEVICES "cpu bind" ${CPU_REORDER[$lrank]} "ndev" $UCX_NET_DEVICES
 numactl --physcpubind=${CPU_REORDER[$lrank]} $APP

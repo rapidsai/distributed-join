@@ -20,6 +20,8 @@
 #include <memory>
 #include <utility>
 #include <tuple>
+#include <string>
+#include <stdexcept>
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
@@ -38,16 +40,82 @@
 #include "../src/generate_table.cuh"
 #include "../src/distributed_join.cuh"
 
-#define KEY_T int64_t
-#define PAYLOAD_T int64_t
+static std::string key_type = "int64_t";
+static std::string payload_type = "int64_t";
 
 static cudf::size_type BUILD_TABLE_NROWS_EACH_RANK = 100'000'000;
 static cudf::size_type PROBE_TABLE_NROWS_EACH_RANK = 100'000'000;
 static double SELECTIVITY = 0.3;
-static KEY_T RAND_MAX_VAL = 200'000'000;
 static bool IS_BUILD_TABLE_KEY_UNIQUE = true;
 static int OVER_DECOMPOSITION_FACTOR = 1;
 static bool USE_BUFFER_COMMUNICATOR = false;
+
+
+void parse_command_line_arguments(int argc, char *argv[])
+{
+    for (int iarg = 0; iarg < argc; iarg++) {
+        if (!strcmp(argv[iarg], "--key-type")) {
+            key_type = argv[iarg + 1];
+        }
+
+        if (!strcmp(argv[iarg], "--payload-type")) {
+            payload_type = argv[iarg + 1];
+        }
+
+        if (!strcmp(argv[iarg], "--build-table-nrows")) {
+            BUILD_TABLE_NROWS_EACH_RANK = atoi(argv[iarg + 1]);
+        }
+
+        if (!strcmp(argv[iarg], "--probe-table-nrows")) {
+            PROBE_TABLE_NROWS_EACH_RANK = atoi(argv[iarg + 1]);
+        }
+
+        if (!strcmp(argv[iarg], "--selectivity")) {
+            SELECTIVITY = atof(argv[iarg + 1]);
+        }
+
+        if (!strcmp(argv[iarg], "--duplicate-build-keys")) {
+            IS_BUILD_TABLE_KEY_UNIQUE = false;
+        }
+
+        if (!strcmp(argv[iarg], "--over-decomposition-factor")) {
+            OVER_DECOMPOSITION_FACTOR = atoi(argv[iarg + 1]);
+        }
+
+        if (!strcmp(argv[iarg], "--use-buffer-communicator")) {
+            USE_BUFFER_COMMUNICATOR = true;
+        }
+    }
+}
+
+
+void report_configuration()
+{
+    MPI_CALL( MPI_Barrier(MPI_COMM_WORLD) );
+
+    int mpi_rank;
+    int mpi_size;
+    MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
+    MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
+    if (mpi_rank != 0)
+        return;
+
+    std::cout << "========== Parameters ==========" << std::endl;
+    std::cout << std::boolalpha;
+    std::cout << "Key type: " << key_type << std::endl;
+    std::cout << "Payload type: " << payload_type << std::endl;
+    std::cout << "Number of rows in the build table: "
+              << static_cast<uint64_t>(BUILD_TABLE_NROWS_EACH_RANK) * mpi_size / 1e6
+              << " million" << std::endl;
+    std::cout << "Number of rows in the probe table: "
+              << static_cast<uint64_t>(PROBE_TABLE_NROWS_EACH_RANK) * mpi_size / 1e6
+              << " million" << std::endl;
+    std::cout << "Selectivity: " << SELECTIVITY << std::endl;
+    std::cout << "Keys in build table are unique: " << IS_BUILD_TABLE_KEY_UNIQUE << std::endl;
+    std::cout << "Over-decomposition factor: " << OVER_DECOMPOSITION_FACTOR << std::endl;
+    std::cout << "Buffer communicator: " << USE_BUFFER_COMMUNICATOR << std::endl;
+    std::cout << "================================" << std::endl;
+}
 
 
 int main(int argc, char *argv[])
@@ -55,6 +123,13 @@ int main(int argc, char *argv[])
     /* Initialize topology */
 
     setup_topology(argc, argv);
+
+    /* Parse command line arguments */
+
+    parse_command_line_arguments(argc, argv);
+    report_configuration();
+
+    cudf::size_type RAND_MAX_VAL = std::max(BUILD_TABLE_NROWS_EACH_RANK, PROBE_TABLE_NROWS_EACH_RANK) * 2;
 
     /* Initialize memory pool */
 
@@ -81,11 +156,33 @@ int main(int argc, char *argv[])
     std::unique_ptr<cudf::table> left;
     std::unique_ptr<cudf::table> right;
 
-    std::tie(left, right) = generate_tables_distributed<KEY_T, PAYLOAD_T>(
-        BUILD_TABLE_NROWS_EACH_RANK, PROBE_TABLE_NROWS_EACH_RANK,
-        SELECTIVITY, RAND_MAX_VAL, IS_BUILD_TABLE_KEY_UNIQUE,
-        communicator
-    );
+    #define generate_tables(KEY_T, PAYLOAD_T)                                  \
+    {                                                                          \
+        std::tie(left, right) = generate_tables_distributed<KEY_T, PAYLOAD_T>( \
+            BUILD_TABLE_NROWS_EACH_RANK, PROBE_TABLE_NROWS_EACH_RANK,          \
+            SELECTIVITY, RAND_MAX_VAL, IS_BUILD_TABLE_KEY_UNIQUE,              \
+            communicator                                                       \
+        );                                                                     \
+    }
+
+    #define generate_tables_key_type(KEY_T)                                    \
+    {                                                                          \
+        if (payload_type == "int64_t") {                                       \
+            generate_tables(KEY_T, int64_t)                                    \
+        } else if (payload_type == "int32_t") {                                \
+            generate_tables(KEY_T, int32_t)                                    \
+        } else {                                                               \
+            throw std::runtime_error("Unknown payload type");                  \
+        }                                                                      \
+    }
+
+    if (key_type == "int64_t") {
+        generate_tables_key_type(int64_t)
+    } else if (key_type == "int32_t") {
+        generate_tables_key_type(int32_t)
+    } else {
+        throw std::runtime_error("Unknown key type");
+    }
 
     /* Distributed join */
 
