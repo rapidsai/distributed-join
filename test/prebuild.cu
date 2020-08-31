@@ -81,13 +81,13 @@ generate_table(int multiple)
     std::vector<std::unique_ptr<cudf::column> > new_table;
 
     // construct the key column
-    auto key_column = cudf::make_numeric_column(cudf::data_type(cudf::INT32), SIZE);
+    auto key_column = cudf::make_numeric_column(cudf::data_type(cudf::type_id::INT32), SIZE);
     auto key_buffer = key_column->mutable_view().head<int>();
     thrust::sequence(thrust::device, key_buffer, key_buffer + SIZE, 0, multiple);
     new_table.push_back(std::move(key_column));
 
     // construct the payload column
-    auto payload_column = cudf::make_numeric_column(cudf::data_type(cudf::INT32), SIZE);
+    auto payload_column = cudf::make_numeric_column(cudf::data_type(cudf::type_id::INT32), SIZE);
     auto payload_buffer = payload_column->mutable_view().head<int>();
     thrust::sequence(thrust::device, payload_buffer, payload_buffer + SIZE);
     new_table.push_back(std::move(payload_column));
@@ -168,6 +168,8 @@ int main(int argc, char *argv[])
             &nblocks, verify_correctness, block_size, 0
         ));
 
+        // Since the key has to be a multiple of 5, the join result size is the size of left table
+        // divided by 5.
         assert(merged_table->num_rows() == SIZE / 5);
 
         verify_correctness<<<nblocks, block_size>>>(
