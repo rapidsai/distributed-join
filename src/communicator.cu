@@ -211,11 +211,24 @@ comm_handle_t UCXCommunicator::recv(void **buf, int64_t *count, int element_size
 
 void UCXCommunicator::wait(comm_handle_t request)
 {
-    while (ucp_request_check_status(request) == UCS_INPROGRESS) {
-        ucp_worker_progress(ucp_worker);
+    ucs_status_t ucx_status;
+
+    if (request == nullptr)
+        return;
+
+    while (true) {
+        ucx_status = ucp_request_check_status(request);
+        if (ucx_status == UCS_INPROGRESS) {
+            ucp_worker_progress(ucp_worker);
+            continue;
+        }
+
+        UCX_CALL(ucx_status);
+        break;
     }
 
-    ucp_request_free(request);
+    if (request != nullptr)
+        ucp_request_free(request);
 }
 
 
@@ -229,15 +242,24 @@ void UCXCommunicator::waitall(
                               std::vector<comm_handle_t>::const_iterator begin,
                               std::vector<comm_handle_t>::const_iterator end)
 {
+    ucs_status_t ucx_status;
+
     while (true) {
         bool all_finished = true;
 
         for (auto it = begin; it != end; it++) {
             auto & request = *it;
-            if (request != nullptr && ucp_request_check_status(request) == UCS_INPROGRESS) {
+            if (request == nullptr)
+                continue;
+
+            ucx_status = ucp_request_check_status(request);
+
+            if (ucx_status == UCS_INPROGRESS) {
                 all_finished = false;
                 break;
             }
+
+            UCX_CALL(ucx_status);
         }
 
         if (all_finished)

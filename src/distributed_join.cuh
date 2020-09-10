@@ -145,7 +145,7 @@ all_to_all_comm(
 
         communicator->start();
 
-        // commuicate with other ranks
+        // communicate with other ranks
         send_data_by_offset(
             hashed.column(icol).head(), offset, dtype_size, communicator, false
         );
