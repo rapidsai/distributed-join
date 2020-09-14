@@ -57,7 +57,7 @@ void MPILikeCommunicator::stop()
 void MPILikeCommunicator::send(const void *buf, int64_t count, int element_size, int dest)
 {
     pending_requests.push_back(
-        send(buf, count, element_size, dest, -1)
+        send(buf, count, element_size, dest, reserved_tag)
     );
 }
 
@@ -65,7 +65,7 @@ void MPILikeCommunicator::send(const void *buf, int64_t count, int element_size,
 void MPILikeCommunicator::recv(void *buf, int64_t count, int element_size, int source)
 {
     pending_requests.push_back(
-        recv(buf, count, element_size, source, -1)
+        recv(buf, count, element_size, source, reserved_tag)
     );
 }
 
@@ -298,8 +298,6 @@ void UCXCommunicator::finalize()
     ucp_worker_release_address(ucp_worker, ucp_worker_address);
     ucp_worker_destroy(ucp_worker);
     ucp_cleanup(ucp_context);
-
-    MPI_CALL(MPI_Finalize());
 }
 
 

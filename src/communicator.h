@@ -164,6 +164,8 @@ virtual void waitall(std::vector<comm_handle_t>::const_iterator begin, std::vect
 
 // used for keeping track of the pending requests since the last *start* call
 std::vector<comm_handle_t> pending_requests;
+// tag to use when no tag is explicitly supplied by the user
+static constexpr int reserved_tag {-1};
 
 };
 

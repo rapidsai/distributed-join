@@ -59,10 +59,14 @@ Partition the input tables into (over decomposition factor) * (number of GPUs) b
 used for computation-communication overlap. This argument has to be an integer >= 1. Higher number
 means smaller batch size. `1` means no overlap. Default: `1`.
 
+**--communicator [STR]**
+
+This option can be either "UCX" or "NCCL", which controls what communicator to use. Default: `UCX`.
+
 **--use-buffer-communicator**
 
-If this option is specified, communication goes through a pre-registered staging buffer. This option
-is recommeneded for IB system to reduce registration overhead.
+If this option is specified, UCX communication goes through a pre-registered staging buffer. This
+option is recommeneded for IB system to reduce registration overhead.
 
 ## Running
 
