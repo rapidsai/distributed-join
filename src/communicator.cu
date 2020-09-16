@@ -805,7 +805,9 @@ void UCXBufferCommunicator::waitall(std::vector<comm_handle_t>::const_iterator b
 
 void UCXBufferCommunicator::finalize()
 {
-    rmm::mr::get_default_resource()->deallocate(cache_start_addr, 0);
+    rmm::mr::get_default_resource()->deallocate(
+        cache_start_addr, comm_buffer_size * buffer_cache.size()
+    );
     UCXCommunicator::finalize();
 }
 
@@ -847,18 +849,44 @@ void NCCLCommunicator::initialize()
 void NCCLCommunicator::start()
 {
     NCCL_CALL( ncclGroupStart() );
+    comm_buffers.clear();
+    comm_buffer_sizes.clear();
+    recv_buffers.clear();
+    recv_buffer_idx.clear();
 }
 
 
 void NCCLCommunicator::send(const void *buf, int64_t count, int element_size, int dest)
 {
-    NCCL_CALL( ncclSend(buf, count * element_size, ncclChar, dest, nccl_comm, comm_stream) );
+    // Note: NCCL has performance issue when the buffer is not 128-bit aligned.
+    // This implementation gets away with issue by forcing the communication to go through a
+    // allocated communication buffer. This buffer is 256B aligned to be compatible with RMM.
+    std::size_t aligned_size = (count * element_size + 255) / 256 * 256;
+
+    comm_buffers.push_back(rmm::mr::get_current_device_resource()->allocate(aligned_size));
+    comm_buffer_sizes.push_back(count * element_size);
+
+    CUDA_RT_CALL(
+        cudaMemcpy(comm_buffers.back(), buf, count * element_size, cudaMemcpyDeviceToDevice
+    ));
+    NCCL_CALL(
+        ncclSend(comm_buffers.back(), aligned_size, ncclChar, dest, nccl_comm, comm_stream)
+    );
 }
 
 
 void NCCLCommunicator::recv(void *buf, int64_t count, int element_size, int source)
 {
-    NCCL_CALL( ncclRecv(buf, count * element_size, ncclChar, source, nccl_comm, comm_stream) );
+    std::size_t aligned_size = (count * element_size + 255) / 256 * 256;
+
+    recv_buffers.push_back(buf);
+    recv_buffer_idx.push_back(comm_buffers.size());
+    comm_buffers.push_back(rmm::mr::get_current_device_resource()->allocate(aligned_size));
+    comm_buffer_sizes.push_back(count * element_size);
+
+    NCCL_CALL(
+        ncclRecv(comm_buffers.back(), aligned_size, ncclChar, source, nccl_comm, comm_stream)
+    );
 }
 
 
@@ -866,6 +894,18 @@ void NCCLCommunicator::stop()
 {
     NCCL_CALL( ncclGroupEnd() );
     CUDA_RT_CALL( cudaStreamSynchronize(comm_stream) );
+
+    for (std::size_t ibuffer = 0; ibuffer < recv_buffers.size(); ibuffer++) {
+        std::size_t idx = recv_buffer_idx[ibuffer];
+        CUDA_RT_CALL(cudaMemcpy(
+            recv_buffers[ibuffer], comm_buffers[idx], comm_buffer_sizes[idx], cudaMemcpyDeviceToDevice
+        ));
+    }
+
+    for (std::size_t ibuffer = 0; ibuffer < comm_buffers.size(); ibuffer++) {
+        std::size_t aligned_size = (comm_buffer_sizes[ibuffer] + 255) / 256 * 256;
+        rmm::mr::get_current_device_resource()->deallocate(comm_buffers[ibuffer], aligned_size);
+    }
 }
 
 

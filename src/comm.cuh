@@ -185,7 +185,9 @@ merge_free_received_offset(
         if (!self_free && irank == communicator->mpi_rank)
             continue;
 
-        rmm::mr::get_default_resource()->deallocate(received_data[irank], 0, 0);
+        rmm::mr::get_default_resource()->deallocate(
+            received_data[irank], bucket_count[irank] * item_size
+        );
     }
 
     return merged_data;

@@ -456,6 +456,11 @@ distributed_inner_join(
             right_buckets[ibatch], right_counts[ibatch], communicator
         );
 
+        if (over_decom_factor == 1) {
+            hashed_left.reset();
+            hashed_right.reset();
+        }
+
         // mark the communication of ibatch as finished.
         // the join thread is safe to start performing local join on ibatch
         flags[ibatch] = true;
@@ -472,8 +477,10 @@ distributed_inner_join(
     inner_join_thread.join();
 
     // hashed left and right tables should not be needed now
-    hashed_left.reset();
-    hashed_right.reset();
+    if (over_decom_factor > 1) {
+        hashed_left.reset();
+        hashed_right.reset();
+    }
 
     /* Merge join results from different batches into a single table */
 

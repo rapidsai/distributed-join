@@ -30,6 +30,8 @@
 class Communicator
 {
 
+// Note: There is no guarantee that communicators will be thread-safe.
+
 public:
 
 /**
@@ -333,5 +335,10 @@ virtual void recv(void *buf, int64_t count, int element_size, int source);
 virtual void finalize();
 
 ncclComm_t nccl_comm;
+std::vector<void *> comm_buffers;  // used for 128-bit alignment
+// used for keeping track of size allocated in comm_buffers
+std::vector<std::size_t> comm_buffer_sizes;
+std::vector<void *> recv_buffers;
+std::vector<std::size_t> recv_buffer_idx;
 
 };
