@@ -154,8 +154,8 @@ int main(int argc, char *argv[])
         communicator->waitall(warmup_recv_reqs);
 
         for (int irank = 0; irank < mpi_rank; irank ++) {
-            mr.deallocate(warmup_send_buffer[irank], WARMUP_BUFFER_SIZE, 0);
-            mr.deallocate(warmup_recv_buffer[irank], WARMUP_BUFFER_SIZE, 0);
+            mr.deallocate(warmup_send_buffer[irank], WARMUP_BUFFER_SIZE, cudaStreamDefault);
+            mr.deallocate(warmup_recv_buffer[irank], WARMUP_BUFFER_SIZE, cudaStreamDefault);
         }
     }
 
@@ -200,7 +200,7 @@ int main(int argc, char *argv[])
         communicator->waitall(recv_reqs);
 
         for (int irank = 0; irank < mpi_rank; irank ++)
-            mr.deallocate(recv_buffer[irank], SIZE / mpi_size, 0);
+            mr.deallocate(recv_buffer[irank], SIZE / mpi_size, cudaStreamDefault);
     }
 
     double stop = MPI_Wtime();
