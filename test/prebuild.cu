@@ -26,8 +26,8 @@
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
 #include <cudf/join.hpp>
-#include <rmm/mr/device/default_memory_resource.hpp>
-#include <rmm/mr/device/cnmem_memory_resource.hpp>
+#include <rmm/mr/device/per_device_resource.hpp>
+#include <rmm/mr/device/pool_memory_resource.hpp>
 #include <thrust/sequence.h>
 #include <thrust/execution_policy.h>
 
@@ -112,8 +112,9 @@ int main(int argc, char *argv[])
     CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
     const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
 
-    rmm::mr::cnmem_memory_resource mr {pool_size};
-    rmm::mr::set_default_resource(&mr);
+    rmm::mr::device_memory_resource* mr = rmm::mr::get_current_device_resource();
+    rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource> pool_mr {mr, pool_size, pool_size};
+    rmm::mr::set_current_device_resource(&pool_mr);
 
     /* Initialize communicator */
 

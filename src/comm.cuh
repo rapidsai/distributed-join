@@ -24,7 +24,7 @@
 
 #include <cudf/types.hpp>
 #include <rmm/device_buffer.hpp>
-#include <rmm/mr/device/default_memory_resource.hpp>
+#include <rmm/mr/device/per_device_resource.hpp>
 
 #include "communicator.h"
 #include "error.cuh"
@@ -197,8 +197,12 @@ merge_free_received_offset(
         if (!self_free && irank == communicator->mpi_rank)
             continue;
 
-        rmm::mr::get_default_resource()->deallocate(received_data[irank], 0, 0);
+        rmm::mr::get_current_device_resource()->deallocate(
+            received_data[irank], bucket_count[irank] * item_size, 0
+        );
     }
+
+    CUDA_RT_CALL( cudaStreamSynchronize(0) );
 
     return merged_data;
 }
