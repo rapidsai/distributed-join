@@ -122,10 +122,10 @@ int main(int argc, char *argv[])
         std::vector<void *> warmup_recv_buffer(mpi_size, nullptr);
 
         for (int irank = 0; irank < mpi_size; irank ++) {
-            warmup_send_buffer[irank] = mr.allocate(WARMUP_BUFFER_SIZE, 0);
+            warmup_send_buffer[irank] = mr.allocate(WARMUP_BUFFER_SIZE, cudaStreamDefault);
         }
 
-        CUDA_RT_CALL( cudaStreamSynchronize(0) );
+        CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
 
         std::vector<comm_handle_t> warmup_send_reqs(mpi_size, nullptr);
         std::vector<comm_handle_t> warmup_recv_reqs(mpi_size, nullptr);
@@ -165,10 +165,10 @@ int main(int argc, char *argv[])
     std::vector<void *> recv_buffer(mpi_size, nullptr);
 
     for (int irank = 0; irank < mpi_size; irank ++) {
-        send_buffer[irank] = mr.allocate(SIZE / mpi_size, 0);
+        send_buffer[irank] = mr.allocate(SIZE / mpi_size, cudaStreamDefault);
     }
 
-    CUDA_RT_CALL( cudaStreamSynchronize(0) );
+    CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
 
     std::vector<comm_handle_t> send_reqs(mpi_size, nullptr);
     std::vector<comm_handle_t> recv_reqs(mpi_size, nullptr);
@@ -215,10 +215,10 @@ int main(int argc, char *argv[])
     /* Cleanup */
 
     for(int irank = 0; irank < mpi_rank; irank++) {
-        mr.deallocate(send_buffer[irank], SIZE / mpi_size, 0);
+        mr.deallocate(send_buffer[irank], SIZE / mpi_size, cudaStreamDefault);
     }
 
-    CUDA_RT_CALL( cudaStreamSynchronize(0) );
+    CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
 
     communicator->finalize();
     delete communicator;

@@ -327,12 +327,18 @@ distributed_inner_join(
     vector<cudf::size_type> right_offset;
 
     std::tie(hashed_left, left_offset) = cudf::detail::hash_partition(
-        left, left_on, mpi_size * over_decom_factor
+        left, left_on, mpi_size * over_decom_factor,
+        rmm::mr::get_current_device_resource(),
+        cudaStreamPerThread
     );
 
     std::tie(hashed_right, right_offset) = cudf::detail::hash_partition(
-        right, right_on, mpi_size * over_decom_factor
+        right, right_on, mpi_size * over_decom_factor,
+        rmm::mr::get_current_device_resource(),
+        cudaStreamPerThread
     );
+
+    CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamPerThread) );
 
     left_offset.push_back(left.num_rows());
     right_offset.push_back(right.num_rows());

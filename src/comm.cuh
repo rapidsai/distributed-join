@@ -198,11 +198,11 @@ merge_free_received_offset(
             continue;
 
         rmm::mr::get_current_device_resource()->deallocate(
-            received_data[irank], bucket_count[irank] * item_size, 0
+            received_data[irank], bucket_count[irank] * item_size, cudaStreamDefault
         );
     }
 
-    CUDA_RT_CALL( cudaStreamSynchronize(0) );
+    CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
 
     return merged_data;
 }

@@ -151,8 +151,8 @@ comm_handle_t UCXCommunicator::recv(void **buf, int64_t *count, int element_size
 
     /* Allocate receive buffer */
 
-    *buf = rmm::mr::get_current_device_resource()->allocate(ucp_probe_info.length, cudaStreamLegacy);
-    CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamLegacy) );
+    *buf = rmm::mr::get_current_device_resource()->allocate(ucp_probe_info.length, cudaStreamDefault);
+    CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
 
     /* Received data */
 
@@ -315,8 +315,10 @@ void UCXBufferCommunicator::initialize()
 void UCXBufferCommunicator::setup_cache(int64_t ncaches, int64_t buffer_size)
 {
     comm_buffer_size = buffer_size;
-    cache_start_addr = rmm::mr::get_current_device_resource()->allocate(comm_buffer_size * ncaches, 0);
-    CUDA_RT_CALL( cudaStreamSynchronize(0) );
+    cache_start_addr = rmm::mr::get_current_device_resource()->allocate(
+        comm_buffer_size * ncaches, cudaStreamDefault
+    );
+    CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
 
     for (int icache = 0; icache < ncaches; icache ++) {
         void *current_buffer = (void *)((char *)cache_start_addr + icache * buffer_size);
@@ -526,9 +528,9 @@ static void recv_handler(void *request, ucs_status_t status,
     if (*(info->recv_buffer) == nullptr && *(info->count) > 0) {
         assert(info->ibatch == 0);
         *(info->recv_buffer) = rmm::mr::get_current_device_resource()->allocate(
-            *(info->count) * element_size, 0
+            *(info->count) * element_size, cudaStreamDefault
         );
-        CUDA_RT_CALL( cudaStreamSynchronize(0) );
+        CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
     }
 
     /* Copy data from communication buffer to user buffer for the finished batch */
@@ -753,9 +755,9 @@ void UCXBufferCommunicator::waitall(std::vector<comm_handle_t>::const_iterator b
 void UCXBufferCommunicator::finalize()
 {
     rmm::mr::get_current_device_resource()->deallocate(
-        cache_start_addr, comm_buffer_size * buffer_cache.size(), 0
+        cache_start_addr, comm_buffer_size * buffer_cache.size(), cudaStreamDefault
     );
-    CUDA_RT_CALL( cudaStreamSynchronize(0) );
+    CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
     UCXCommunicator::finalize();
 }
 

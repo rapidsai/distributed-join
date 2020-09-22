@@ -143,11 +143,13 @@ int main(int argc, char *argv[])
 
     for (int irank = 0; irank < mpi_size; irank ++) {
         if (irank != mpi_rank) {
-            rmm::mr::get_current_device_resource()->deallocate(recv_buf[irank], COUNT, 0);
+            rmm::mr::get_current_device_resource()->deallocate(
+                recv_buf[irank], COUNT, cudaStreamDefault
+            );
         }
     }
 
-    CUDA_RT_CALL( cudaStreamSynchronize(0) );
+    CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
     communicator->finalize();
     delete communicator;
 
