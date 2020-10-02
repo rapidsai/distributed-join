@@ -150,7 +150,7 @@ recv_data_by_offset(
  *                                 from rank i. Buffers contained in this argument will be freed in this function. Also
  *                                 see 'recv_data_by_offset'.
  * @param[in] bucket_count         Vector with length of number of ranks, where the ith entry represents the the number
- *                                 of elements of received_data[i]. See 'recv_data_by_offset'.
+ *                                 of elements of received_data[i].
  * @param[in] item_size            The size of each element.
  * @param[out] total_count         The number of elements in the merged buffer returned from this function. It is the
  *                                 sum of bucket_count.

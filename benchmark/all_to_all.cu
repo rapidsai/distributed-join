@@ -17,6 +17,7 @@
 #include <vector>
 #include <mpi.h>
 #include <iostream>
+#include <string>
 #include <cuda_profiler_api.h>
 #include <cstdint>
 #include <rmm/mr/device/per_device_resource.hpp>
@@ -31,6 +32,7 @@ static int64_t SIZE = 800'000'000LL;
 static int64_t BUFFER_SIZE = 25'000'000LL;
 static int REPEAT = 4;
 static bool WARM_UP = false;
+static std::string COMMUNICATOR_NAME = "UCX";
 static bool USE_BUFFER_COMMUNICATOR = false;
 
 
@@ -53,6 +55,10 @@ void parse_command_line_arguments(int argc, char *argv[])
             WARM_UP = true;
         }
 
+        if (!strcmp(argv[iarg], "--communicator")) {
+            COMMUNICATOR_NAME = argv[iarg + 1];
+        }
+
         if (!strcmp(argv[iarg], "--use-buffer-communicator")) {
             USE_BUFFER_COMMUNICATOR = true;
         }
@@ -72,10 +78,11 @@ void report_configuration()
     std::cout << "========== Parameters ==========" << std::endl;
     std::cout << std::boolalpha;
     std::cout << "Size: " << SIZE << std::endl;
-    std::cout << "Buffer communicator: " << USE_BUFFER_COMMUNICATOR << std::endl;
-    if (USE_BUFFER_COMMUNICATOR) {
+    std::cout << "Communicator: " << COMMUNICATOR_NAME << std::endl;
+    if (COMMUNICATOR_NAME == "UCX")
+        std::cout << "Buffer communicator: " << USE_BUFFER_COMMUNICATOR << std::endl;
+    if (USE_BUFFER_COMMUNICATOR)
         std::cout << "Buffer size: " << BUFFER_SIZE << std::endl;
-    }
     std::cout << "Repeat: " << REPEAT << std::endl;
     std::cout << "Warmup: " << WARM_UP << std::endl;
     std::cout << "================================" << std::endl;
@@ -95,13 +102,7 @@ int main(int argc, char *argv[])
 
     /* Initialize memory pool */
 
-    size_t free_memory, total_memory;
-    CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
-    const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
-
-    rmm::mr::device_memory_resource* current_mr = rmm::mr::get_current_device_resource();
-    rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource> mr {
-        current_mr, pool_size, pool_size};
+    rmm::mr::device_memory_resource* mr = rmm::mr::get_current_device_resource();
 
     /* Initialize communicator */
 
@@ -110,53 +111,53 @@ int main(int argc, char *argv[])
     MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
     MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
 
-    UCXCommunicator* communicator = initialize_ucx_communicator(
-        USE_BUFFER_COMMUNICATOR, 2 * mpi_size, BUFFER_SIZE
-    );
+    Communicator *communicator;
+    if (COMMUNICATOR_NAME == "UCX") {
+        communicator = initialize_ucx_communicator(
+            USE_BUFFER_COMMUNICATOR, 2 * mpi_size, BUFFER_SIZE);
+    } else if (COMMUNICATOR_NAME == "NCCL") {
+        communicator = new NCCLCommunicator;
+        communicator->initialize();
+    } else {
+        throw "Unknown communicator name";
+    }
 
     /* Warmup if necessary */
 
     if (WARM_UP) {
-        const int64_t WARMUP_BUFFER_SIZE = 1'000'000LL;
+        const int64_t WARMUP_BUFFER_SIZE = 4'000'000LL;
         std::vector<void *> warmup_send_buffer(mpi_size, nullptr);
         std::vector<void *> warmup_recv_buffer(mpi_size, nullptr);
 
         for (int irank = 0; irank < mpi_size; irank ++) {
-            warmup_send_buffer[irank] = mr.allocate(WARMUP_BUFFER_SIZE, cudaStreamDefault);
+            warmup_send_buffer[irank] = mr->allocate(WARMUP_BUFFER_SIZE, cudaStreamDefault);
+            warmup_recv_buffer[irank] = mr->allocate(WARMUP_BUFFER_SIZE, cudaStreamDefault);
         }
 
         CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
 
-        std::vector<comm_handle_t> warmup_send_reqs(mpi_size, nullptr);
-        std::vector<comm_handle_t> warmup_recv_reqs(mpi_size, nullptr);
+        communicator->start();
 
         for (int irank = 0; irank < mpi_size; irank++) {
             if (irank != mpi_rank) {
-                warmup_send_reqs[irank] = communicator->send(
-                    warmup_send_buffer[irank], WARMUP_BUFFER_SIZE, 1, irank, 10
-                );
-            } else {
-                warmup_send_reqs[irank] = nullptr;
+                communicator->send(warmup_send_buffer[irank], WARMUP_BUFFER_SIZE, 1, irank);
             }
         }
 
         for (int irank = 0; irank < mpi_size; irank++) {
             if (irank != mpi_rank) {
-                warmup_recv_reqs[irank] = communicator->recv(
-                    &warmup_recv_buffer[irank], nullptr, 1, irank, 10
-                );
-            } else {
-                warmup_recv_reqs[irank] = nullptr;
+                communicator->recv(warmup_recv_buffer[irank], WARMUP_BUFFER_SIZE, 1, irank);
             }
         }
 
-        communicator->waitall(warmup_send_reqs);
-        communicator->waitall(warmup_recv_reqs);
+        communicator->stop();
 
         for (int irank = 0; irank < mpi_rank; irank ++) {
-            mr.deallocate(warmup_send_buffer[irank], WARMUP_BUFFER_SIZE, cudaStreamDefault);
-            mr.deallocate(warmup_recv_buffer[irank], WARMUP_BUFFER_SIZE, cudaStreamDefault);
+            mr->deallocate(warmup_send_buffer[irank], WARMUP_BUFFER_SIZE, cudaStreamDefault);
+            mr->deallocate(warmup_recv_buffer[irank], WARMUP_BUFFER_SIZE, cudaStreamDefault);
         }
+
+        CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
     }
 
     /* Allocate data buffers */
@@ -165,42 +166,33 @@ int main(int argc, char *argv[])
     std::vector<void *> recv_buffer(mpi_size, nullptr);
 
     for (int irank = 0; irank < mpi_size; irank ++) {
-        send_buffer[irank] = mr.allocate(SIZE / mpi_size, cudaStreamDefault);
+        send_buffer[irank] = mr->allocate(SIZE / mpi_size, cudaStreamDefault);
+        recv_buffer[irank] = mr->allocate(SIZE / mpi_size, cudaStreamDefault);
     }
 
     CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
 
-    std::vector<comm_handle_t> send_reqs(mpi_size, nullptr);
-    std::vector<comm_handle_t> recv_reqs(mpi_size, nullptr);
-
     /* Communication */
 
-    UCX_CALL(ucp_worker_flush(communicator->ucp_worker));
     MPI_Barrier(MPI_COMM_WORLD);
     cudaProfilerStart();
     double start = MPI_Wtime();
 
     for (int icol = 0; icol < REPEAT; icol ++)
     {
+        communicator->start();
+
         for (int irank = 0; irank < mpi_size; irank++) {
             if (irank != mpi_rank)
-                send_reqs[irank] = communicator->send(send_buffer[irank], SIZE / mpi_size, 1, irank, 20);
-            else
-                send_reqs[irank] = nullptr;
+                communicator->send(send_buffer[irank], SIZE / mpi_size, 1, irank);
         }
 
         for (int irank = 0; irank < mpi_size; irank++) {
             if (irank != mpi_rank)
-                recv_reqs[irank] = communicator->recv(&recv_buffer[irank], nullptr, 1, irank, 20);
-            else
-                recv_reqs[irank] = nullptr;
+                communicator->recv(recv_buffer[irank], SIZE / mpi_size, 1, irank);
         }
 
-        communicator->waitall(send_reqs);
-        communicator->waitall(recv_reqs);
-
-        for (int irank = 0; irank < mpi_rank; irank ++)
-            mr.deallocate(recv_buffer[irank], SIZE / mpi_size, cudaStreamDefault);
+        communicator->stop();
     }
 
     double stop = MPI_Wtime();
@@ -209,19 +201,22 @@ int main(int argc, char *argv[])
     MPI_Barrier(MPI_COMM_WORLD);
     if (mpi_rank == 0) {
         std::cerr << "Elasped time (s) " << stop - start << std::endl;
-        std::cerr << "Bandwidth (GB/s) " << (double)SIZE * (mpi_size - 1) * REPEAT / (stop - start) / 1e9 << std::endl;
+        std::cerr << "Bandwidth (GB/s) " << (double)SIZE / mpi_size * (mpi_size - 1) * REPEAT / (stop - start) / 1e9 << std::endl;
     }
 
     /* Cleanup */
 
     for(int irank = 0; irank < mpi_rank; irank++) {
-        mr.deallocate(send_buffer[irank], SIZE / mpi_size, cudaStreamDefault);
+        mr->deallocate(send_buffer[irank], SIZE / mpi_size, cudaStreamDefault);
+        mr->deallocate(recv_buffer[irank], SIZE / mpi_size, cudaStreamDefault);
     }
 
     CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
 
     communicator->finalize();
     delete communicator;
+
+    MPI_CALL( MPI_Finalize() );
 
     return 0;
 }
