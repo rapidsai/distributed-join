@@ -36,8 +36,8 @@
 #include <cudf/join.hpp>
 #include <rmm/device_buffer.hpp>
 #include <rmm/mr/device/device_memory_resource.hpp>
-#include <rmm/mr/device/default_memory_resource.hpp>
 #include <mpi.h>
+#include <rmm/mr/device/per_device_resource.hpp>
 
 #include "error.cuh"
 #include "communicator.h"
@@ -267,6 +267,7 @@ inner_join_func(
     rmm::mr::device_memory_resource* mr)
 {
     CUDA_RT_CALL(cudaSetDevice(communicator->current_device));
+    rmm::mr::set_current_device_resource(mr);
 
     std::chrono::time_point<high_resolution_clock> start_time;
     std::chrono::time_point<high_resolution_clock> stop_time;
@@ -375,12 +376,18 @@ distributed_inner_join(
     vector<cudf::size_type> right_offset;
 
     std::tie(hashed_left, left_offset) = cudf::detail::hash_partition(
-        left, left_on, mpi_size * over_decom_factor
+        left, left_on, mpi_size * over_decom_factor,
+        rmm::mr::get_current_device_resource(),
+        cudaStreamPerThread
     );
 
     std::tie(hashed_right, right_offset) = cudf::detail::hash_partition(
-        right, right_on, mpi_size * over_decom_factor
+        right, right_on, mpi_size * over_decom_factor,
+        rmm::mr::get_current_device_resource(),
+        cudaStreamPerThread
     );
+
+    CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamPerThread) );
 
     left_offset.push_back(left.num_rows());
     right_offset.push_back(right.num_rows());
@@ -428,7 +435,7 @@ distributed_inner_join(
         std::ref(left_buckets), std::ref(left_counts), std::ref(left_dtypes),
         std::ref(right_buckets), std::ref(right_counts), std::ref(right_dtypes),
         std::ref(batch_join_results), left_on, right_on, columns_in_common,
-        std::ref(flags), communicator, report_timing, rmm::mr::get_default_resource()
+        std::ref(flags), communicator, report_timing, rmm::mr::get_current_device_resource()
     );
 
     /* Use the current thread for all-to-all communication */
