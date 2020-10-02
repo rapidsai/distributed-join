@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <cassert>
 #include <iostream>
+#include <stdexcept>
 
 #include <rmm/mr/device/per_device_resource.hpp>
 
@@ -354,7 +355,7 @@ void UCXBufferCommunicator::initialize()
     UCXCommunicator::initialize();
 
     if (mpi_size > 65536) {
-        throw "Ranks > 65536 is not supported due to tag limitation.";
+        throw std::runtime_error("Ranks > 65536 is not supported due to tag limitation");
     }
 
     /* Create priority stream for copying between user buffer and comm buffer. Useful for overlapping. */
@@ -535,7 +536,7 @@ comm_handle_t UCXBufferCommunicator::send(const void *buf, int64_t count, int el
     // Get the communication buffer
     if (buffer_cache.empty()) {
         // TODO: A better way to implement this would print a warning and fallback to normal send.
-        throw "No buffered cache available. Abort.\n";
+        throw std::runtime_error("No buffered cache available");
     }
 
     void *comm_buffer = buffer_cache.front();
@@ -679,7 +680,7 @@ comm_handle_t UCXBufferCommunicator::recv_helper(void **buf, int64_t *count, int
     // Get the communication buffer
     if (buffer_cache.empty()) {
         // TODO: A better way to implement this would print a warning and fallback to normal send.
-        throw "No buffered cache available. Abort.\n";
+        throw std::runtime_error("No buffered cache available");
     }
 
     void *comm_buffer = buffer_cache.front();

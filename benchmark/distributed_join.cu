@@ -163,6 +163,8 @@ int main(int argc, char *argv[])
     } else if (COMMUNICATOR_NAME == "NCCL") {
         communicator = new NCCLCommunicator;
         communicator->initialize();
+    } else {
+        throw std::runtime_error("Unknown communicator name");
     }
 
     /* Generate build table and probe table on each rank */

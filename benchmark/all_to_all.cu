@@ -18,6 +18,7 @@
 #include <mpi.h>
 #include <iostream>
 #include <string>
+#include <stdexcept>
 #include <cuda_profiler_api.h>
 #include <cstdint>
 #include <rmm/mr/device/per_device_resource.hpp>
@@ -119,7 +120,7 @@ int main(int argc, char *argv[])
         communicator = new NCCLCommunicator;
         communicator->initialize();
     } else {
-        throw "Unknown communicator name";
+        throw std::runtime_error("Unknown communicator name");
     }
 
     /* Warmup if necessary */
