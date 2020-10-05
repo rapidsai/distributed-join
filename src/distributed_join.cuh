@@ -75,6 +75,9 @@ communicate_sizes(
 
     recv_count.resize(mpi_size, -1);
 
+    // Note: MPI is used for communicating the sizes instead of *Communicator* because
+    // *Communicator* is not guaranteed to be able to send/recv host buffers.
+
     vector<MPI_Request> send_req(mpi_size);
     vector<MPI_Request> recv_req(mpi_size);
 
@@ -112,7 +115,7 @@ communicate_sizes(
  * of bucket i in `hashed`.
  * @param[out] local_buckets The received table from each rank. local_buckets[i][j] points to the
  * data from rank j of column i. This argument does not need to be preallocated, but the caller is
- * responsible for freeing this buffer using RMM_FREE.
+ * responsible for freeing this buffer using RMM.
  * @param[out] recv_nrows The number of rows received from each rank. recv_nrows[i] stores the
  * number of rows received from rank i.
  * @param[in] communicator An instance of `Communicator` used for communication.
@@ -249,6 +252,32 @@ all_to_all_comm_single_batch(
 }
 
 
+/**
+ * Local join thread used for merging incoming partitions and performing local joins.
+ *
+ * @param[in] left_buckets Received partitions of the left table from remote GPUs.
+ *     *left_buckets[i, j, k]* contains a pointer to the ith batch, jth column and kth partition.
+ * @param[in] left_counts *left_counts[i, j]* stores the number of rows for jth partition in ith
+ *     batch of the left table.
+ * @param[in] left_dtypes Column data types of the left table.
+ * @param[in] right_buckets Received partitions of the right table from remote GPUs.
+ *     *right_buckets[i, j, k]* contains a pointer to the ith batch, jth column and kth partition.
+ * @param[in] right_counts *right_counts[i, j]* stores the number of rows for jth partition in ith
+ *     batch of the right table.
+ * @param[in] right_dtypes Column data types of the right table.
+ * @param[out] batch_join_results Inner join result of each batch.
+ * @param[in] left_on Column indices from the left table to join on. This argument will be passed
+ *     directly *cudf::inner_join*.
+ * @param[in] right_on Column indices from the right table to join on. This argument will be passed
+ *     directly *cudf::inner_join*.
+ * @param[in] columns_in_common Vector of pairs of column indices from the left and right table that
+ *     are in common and only one column will be produced in *batch_join_results*. This argument
+ *     will be passed directly *cudf::inner_join*.
+ * @param[in] flags *flags[i]* is true if and only if the ith batch has finished the all-to-all
+ *     communication.
+ * @param[in] report_timing Whether to print the local join time to stderr.
+ * @param[in] mr: RMM memory resource.
+ */
 void
 inner_join_func(
     vector<vector<vector<void *> > > const& left_buckets,
@@ -421,7 +450,10 @@ distributed_inner_join(
     vector<vector<vector<void *> > > right_buckets(over_decom_factor);  // [ibatch, icol, ibucket]
     vector<vector<int64_t> > left_counts(over_decom_factor);  // [ibatch, ibucket]
     vector<vector<int64_t> > right_counts(over_decom_factor);  // [ibatch, ibucket]
-    vector<std::atomic<bool> > flags(over_decom_factor);  // whether each batch has finished communication
+    // *flags* indicates whether each batch has finished communication
+    // *flags* uses std::atomic because unsynchronized access to an object which is modified in one
+    // thread and read in another is undefined behavior.
+    vector<std::atomic<bool> > flags(over_decom_factor);
     vector<std::unique_ptr<table> > batch_join_results(over_decom_factor);
 
     for (auto &flag : flags) {

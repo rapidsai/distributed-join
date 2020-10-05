@@ -80,13 +80,15 @@ virtual void finalize() = 0;
 int mpi_rank;
 int mpi_size;
 int current_device;
-cudaStream_t comm_stream;
 
 };
 
 
 class MPILikeCommunicator : public Communicator
 {
+
+// *MPILikeCommunicator* is an abstract class which implements the behavior of start/stop pairs
+// for communication libraries like MPI or UCX.
 
 // Note: For all tag send/recv operations, -1 is a reserved tag and should not be used
 // TODO: Enforce this assumption by runtime checking.
@@ -334,6 +336,9 @@ virtual void recv(void *buf, int64_t count, int element_size, int source);
 
 virtual void finalize();
 
+// Stream created/destroyed by the communicator object that is used for communication-related
+// kernels/copies
+cudaStream_t comm_stream;
 ncclComm_t nccl_comm;
 std::vector<void *> comm_buffers;  // used for 128-bit alignment
 // used for keeping track of size allocated in comm_buffers

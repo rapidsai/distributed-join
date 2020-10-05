@@ -33,7 +33,6 @@ void Communicator::initialize()
     MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
     MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
     CUDA_RT_CALL( cudaGetDevice(&current_device) );
-    comm_stream = 0;
 }
 
 

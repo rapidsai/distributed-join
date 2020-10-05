@@ -107,7 +107,7 @@ send_data_by_offset(
  * Note: This call should be enclosed by communicator->start() and communicator->stop().
  *
  * @param[out] data         The data received from each rank. This argument does not need to be preallocated, but the
- *                          caller is responsible for freeing this buffer using RMM_FREE. See
+ *                          caller is responsible for freeing this buffer using RMM. See
  *                          'merge_free_received_offset'.
  * @param[in] count         The number of items to be received from each rank.
  * @param[in] item_size     The size of each item. Used for passing to receive function in UCX.

@@ -15,7 +15,8 @@ For production-quality distributed join implementation, checkout [cuDF's Dask in
 
 This project depends on CUDA, UCX, MPI and cuDF.
 
-To compile, make sure the variables `CUDA_HOME`, `CUDF_HOME`, `MPI_HOME` and `UCX_HOME` are pointing to the installation path of CUDA, cuDF, MPI, and UCX repectively.
+To compile, make sure the variables `CUDA_HOME`, `CUDF_HOME`, `MPI_HOME`, `UCX_HOME` and `NCCL_HOME`
+are pointing to the installation path of CUDA, cuDF, MPI, UCX and NCCL repectively.
 
 [The wiki page](https://github.com/rapidsai/distributed-join/wiki/How-to-compile-and-run-the-code) contains step-by-step instructions for setting up the environment.
 
