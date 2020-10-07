@@ -57,5 +57,10 @@ RUN apt-get install ./ucx-v1.9.0-ubuntu18.04-mofed5.0-1.0.0.0-cuda11.0.deb -y \
 ENV UCX_HOME=/usr
 
 # Setup MPI
-RUN apt-get install -y openmpi-bin libopenmpi-dev numactl
-ENV MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi
+ADD https://download.open-mpi.org/release/open-mpi/v4.0/openmpi-4.0.5.tar.gz .
+RUN apt-get install -y numactl libnuma-dev && \
+    tar -zxf openmpi-4.0.5.tar.gz && \
+    cd openmpi-4.0.5 && ./configure --prefix=/opt/openmpi-4.0.5 && make -j && make install
+ENV MPI_HOME=/opt/openmpi-4.0.5
+ENV PATH=${MPI_HOME}/bin:${PATH}
+ENV LD_LIBRARY_PATH=${MPI_HOME}/lib:${LD_LIBRARY_PATH}
