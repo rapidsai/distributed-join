@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <cassert>
 #include <iostream>
+#include <stdexcept>
 
 #include <rmm/mr/device/per_device_resource.hpp>
 
@@ -27,12 +28,50 @@
 #include "error.cuh"
 
 
-void UCXCommunicator::initialize_ucx()
+void Communicator::initialize()
 {
     MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
     MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
     CUDA_RT_CALL( cudaGetDevice(&current_device) );
+}
 
+
+void MPILikeCommunicator::initialize()
+{
+    Communicator::initialize();
+}
+
+
+void MPILikeCommunicator::start()
+{
+    pending_requests.clear();
+}
+
+
+void MPILikeCommunicator::stop()
+{
+    waitall(pending_requests);
+}
+
+
+void MPILikeCommunicator::send(const void *buf, int64_t count, int element_size, int dest)
+{
+    pending_requests.push_back(
+        send(buf, count, element_size, dest, reserved_tag)
+    );
+}
+
+
+void MPILikeCommunicator::recv(void *buf, int64_t count, int element_size, int source)
+{
+    pending_requests.push_back(
+        recv(buf, count, element_size, source, reserved_tag)
+    );
+}
+
+
+void UCXCommunicator::initialize_ucx()
+{
     ucp_params_t        ucp_params;
     ucp_config_t        *ucp_config;
     ucp_worker_params_t ucp_worker_params;
@@ -59,7 +98,7 @@ void UCXCommunicator::initialize_ucx()
 
 void UCXCommunicator::create_endpoints()
 {
-    /* Broadcast worker addresses to all nodes */
+    /* Broadcast worker addresses to all ranks */
 
     void *ucp_worker_address_book = malloc(ucp_worker_address_len * mpi_size);
     MPI_CALL(MPI_Allgather(
@@ -67,7 +106,7 @@ void UCXCommunicator::create_endpoints()
         ucp_worker_address_book, ucp_worker_address_len, MPI_CHAR, MPI_COMM_WORLD
     ));
 
-    /* Create endpoints of all nodes */
+    /* Create endpoints on all ranks */
 
     std::vector<ucp_ep_params_t> ucp_ep_params;
 
@@ -90,6 +129,7 @@ void UCXCommunicator::create_endpoints()
 
 void UCXCommunicator::initialize()
 {
+    MPILikeCommunicator::initialize();
     initialize_ucx();
     create_endpoints();
 }
@@ -172,11 +212,24 @@ comm_handle_t UCXCommunicator::recv(void **buf, int64_t *count, int element_size
 
 void UCXCommunicator::wait(comm_handle_t request)
 {
-    while (ucp_request_check_status(request) == UCS_INPROGRESS) {
-        ucp_worker_progress(ucp_worker);
+    ucs_status_t ucx_status;
+
+    if (request == nullptr)
+        return;
+
+    while (true) {
+        ucx_status = ucp_request_check_status(request);
+        if (ucx_status == UCS_INPROGRESS) {
+            ucp_worker_progress(ucp_worker);
+            continue;
+        }
+
+        UCX_CALL(ucx_status);
+        break;
     }
 
-    ucp_request_free(request);
+    if (request != nullptr)
+        ucp_request_free(request);
 }
 
 
@@ -190,15 +243,24 @@ void UCXCommunicator::waitall(
                               std::vector<comm_handle_t>::const_iterator begin,
                               std::vector<comm_handle_t>::const_iterator end)
 {
+    ucs_status_t ucx_status;
+
     while (true) {
         bool all_finished = true;
 
         for (auto it = begin; it != end; it++) {
             auto & request = *it;
-            if (request != nullptr && ucp_request_check_status(request) == UCS_INPROGRESS) {
+            if (request == nullptr)
+                continue;
+
+            ucx_status = ucp_request_check_status(request);
+
+            if (ucx_status == UCS_INPROGRESS) {
                 all_finished = false;
                 break;
             }
+
+            UCX_CALL(ucx_status);
         }
 
         if (all_finished)
@@ -237,8 +299,6 @@ void UCXCommunicator::finalize()
     ucp_worker_release_address(ucp_worker, ucp_worker_address);
     ucp_worker_destroy(ucp_worker);
     ucp_cleanup(ucp_context);
-
-    MPI_CALL(MPI_Finalize());
 }
 
 
@@ -254,12 +314,8 @@ static void request_init(void *request)
 
 void UCXBufferCommunicator::initialize_ucx()
 {
-    // Note: This initialization is different from UCXCommunicator on requesting reserved space in the communication
-    // handle.
-
-    MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
-    MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
-    CUDA_RT_CALL( cudaGetDevice(&current_device) );
+    // Note: This initialization is different from UCXCommunicator on requesting reserved space in
+    // the communication handle.
 
     ucp_params_t        ucp_params;
     ucp_config_t        *ucp_config;
@@ -298,7 +354,7 @@ void UCXBufferCommunicator::initialize()
     UCXCommunicator::initialize();
 
     if (mpi_size > 65536) {
-        throw "Ranks > 65536 is not supported due to tag limitation.";
+        throw std::runtime_error("Ranks > 65536 is not supported due to tag limitation");
     }
 
     /* Create priority stream for copying between user buffer and comm buffer. Useful for overlapping. */
@@ -479,7 +535,7 @@ comm_handle_t UCXBufferCommunicator::send(const void *buf, int64_t count, int el
     // Get the communication buffer
     if (buffer_cache.empty()) {
         // TODO: A better way to implement this would print a warning and fallback to normal send.
-        throw "No buffered cache available. Abort.\n";
+        throw std::runtime_error("No buffered cache available");
     }
 
     void *comm_buffer = buffer_cache.front();
@@ -623,7 +679,7 @@ comm_handle_t UCXBufferCommunicator::recv_helper(void **buf, int64_t *count, int
     // Get the communication buffer
     if (buffer_cache.empty()) {
         // TODO: A better way to implement this would print a warning and fallback to normal send.
-        throw "No buffered cache available. Abort.\n";
+        throw std::runtime_error("No buffered cache available");
     }
 
     void *comm_buffer = buffer_cache.front();
@@ -779,4 +835,91 @@ UCXCommunicator* initialize_ucx_communicator(bool use_buffer_communicator,
         communicator->initialize();
         return communicator;
     }
+}
+
+
+void NCCLCommunicator::initialize()
+{
+    Communicator::initialize();
+
+    ncclUniqueId nccl_id;
+    if (mpi_rank == 0)
+        NCCL_CALL( ncclGetUniqueId(&nccl_id) );
+    MPI_CALL( MPI_Bcast(&nccl_id, sizeof(nccl_id), MPI_BYTE, 0, MPI_COMM_WORLD) );
+    NCCL_CALL( ncclCommInitRank(&nccl_comm, mpi_size, nccl_id, mpi_rank) );
+
+    CUDA_RT_CALL( cudaStreamCreate(&comm_stream) );
+}
+
+
+void NCCLCommunicator::start()
+{
+    NCCL_CALL( ncclGroupStart() );
+    comm_buffers.clear();
+    comm_buffer_sizes.clear();
+    recv_buffers.clear();
+    recv_buffer_idx.clear();
+}
+
+
+void NCCLCommunicator::send(const void *buf, int64_t count, int element_size, int dest)
+{
+    // Note: NCCL has performance issue when the buffer is not 128-bit aligned.
+    // This implementation gets away with issue by forcing the communication to go through a
+    // allocated communication buffer. This buffer is 256B aligned to be compatible with RMM.
+    std::size_t aligned_size = (count * element_size + 255) / 256 * 256;
+
+    comm_buffers.push_back(
+        rmm::mr::get_current_device_resource()->allocate(aligned_size, comm_stream));
+    comm_buffer_sizes.push_back(count * element_size);
+
+    CUDA_RT_CALL(cudaMemcpyAsync(
+        comm_buffers.back(), buf, count * element_size, cudaMemcpyDeviceToDevice, comm_stream
+    ));
+    NCCL_CALL(ncclSend(comm_buffers.back(), aligned_size, ncclChar, dest, nccl_comm, comm_stream));
+}
+
+
+void NCCLCommunicator::recv(void *buf, int64_t count, int element_size, int source)
+{
+    std::size_t aligned_size = (count * element_size + 255) / 256 * 256;
+
+    recv_buffers.push_back(buf);
+    recv_buffer_idx.push_back(comm_buffers.size());
+    comm_buffers.push_back(
+        rmm::mr::get_current_device_resource()->allocate(aligned_size, comm_stream));
+    comm_buffer_sizes.push_back(count * element_size);
+
+    NCCL_CALL(
+        ncclRecv(comm_buffers.back(), aligned_size, ncclChar, source, nccl_comm, comm_stream)
+    );
+}
+
+
+void NCCLCommunicator::stop()
+{
+    NCCL_CALL( ncclGroupEnd() );
+
+    for (std::size_t ibuffer = 0; ibuffer < recv_buffers.size(); ibuffer++) {
+        std::size_t idx = recv_buffer_idx[ibuffer];
+        CUDA_RT_CALL(cudaMemcpyAsync(
+            recv_buffers[ibuffer], comm_buffers[idx], comm_buffer_sizes[idx],
+            cudaMemcpyDeviceToDevice, comm_stream
+        ));
+    }
+
+    for (std::size_t ibuffer = 0; ibuffer < comm_buffers.size(); ibuffer++) {
+        std::size_t aligned_size = (comm_buffer_sizes[ibuffer] + 255) / 256 * 256;
+        rmm::mr::get_current_device_resource()->deallocate(
+            comm_buffers[ibuffer], aligned_size, comm_stream);
+    }
+
+    CUDA_RT_CALL( cudaStreamSynchronize(comm_stream) );
+}
+
+
+void NCCLCommunicator::finalize()
+{
+    CUDA_RT_CALL( cudaStreamDestroy(comm_stream) );
+    NCCL_CALL( ncclCommDestroy(nccl_comm) );
 }

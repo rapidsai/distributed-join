@@ -48,6 +48,7 @@ static cudf::size_type PROBE_TABLE_NROWS_EACH_RANK = 100'000'000;
 static double SELECTIVITY = 0.3;
 static bool IS_BUILD_TABLE_KEY_UNIQUE = true;
 static int OVER_DECOMPOSITION_FACTOR = 1;
+static std::string COMMUNICATOR_NAME = "UCX";
 static bool USE_BUFFER_COMMUNICATOR = false;
 
 
@@ -82,6 +83,10 @@ void parse_command_line_arguments(int argc, char *argv[])
             OVER_DECOMPOSITION_FACTOR = atoi(argv[iarg + 1]);
         }
 
+        if (!strcmp(argv[iarg], "--communicator")) {
+            COMMUNICATOR_NAME = argv[iarg + 1];
+        }
+
         if (!strcmp(argv[iarg], "--use-buffer-communicator")) {
             USE_BUFFER_COMMUNICATOR = true;
         }
@@ -113,7 +118,9 @@ void report_configuration()
     std::cout << "Selectivity: " << SELECTIVITY << std::endl;
     std::cout << "Keys in build table are unique: " << IS_BUILD_TABLE_KEY_UNIQUE << std::endl;
     std::cout << "Over-decomposition factor: " << OVER_DECOMPOSITION_FACTOR << std::endl;
-    std::cout << "Buffer communicator: " << USE_BUFFER_COMMUNICATOR << std::endl;
+    std::cout << "Communicator: " << COMMUNICATOR_NAME << std::endl;
+    if (COMMUNICATOR_NAME == "UCX")
+        std::cout << "Buffer communicator: " << USE_BUFFER_COMMUNICATOR << std::endl;
     std::cout << "================================" << std::endl;
 }
 
@@ -148,11 +155,19 @@ int main(int argc, char *argv[])
     MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
     MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
 
-    UCXCommunicator* communicator = initialize_ucx_communicator(
-        USE_BUFFER_COMMUNICATOR, 2 * mpi_size, 800'000'000LL / mpi_size - 100'000LL
-    );
+    Communicator* communicator;
+    if (COMMUNICATOR_NAME == "UCX") {
+        communicator = initialize_ucx_communicator(
+            USE_BUFFER_COMMUNICATOR, 2 * mpi_size, 800'000'000LL / mpi_size - 100'000LL
+        );
+    } else if (COMMUNICATOR_NAME == "NCCL") {
+        communicator = new NCCLCommunicator;
+        communicator->initialize();
+    } else {
+        throw std::runtime_error("Unknown communicator name");
+    }
 
-    /* Generate build table and probe table on each node */
+    /* Generate build table and probe table on each rank */
 
     std::unique_ptr<cudf::table> left;
     std::unique_ptr<cudf::table> right;
@@ -211,6 +226,8 @@ int main(int argc, char *argv[])
 
     communicator->finalize();
     delete communicator;
+
+    MPI_CALL( MPI_Finalize() );
 
     return 0;
 }

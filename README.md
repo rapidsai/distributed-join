@@ -15,7 +15,8 @@ For production-quality distributed join implementation, checkout [cuDF's Dask in
 
 This project depends on CUDA, UCX, MPI and cuDF.
 
-To compile, make sure the variables `CUDA_HOME`, `CUDF_HOME`, `MPI_HOME` and `UCX_HOME` are pointing to the installation path of CUDA, cuDF, MPI, and UCX repectively.
+To compile, make sure the variables `CUDA_HOME`, `CUDF_HOME`, `MPI_HOME`, `UCX_HOME` and `NCCL_HOME`
+are pointing to the installation path of CUDA, cuDF, MPI, UCX and NCCL repectively.
 
 [The wiki page](https://github.com/rapidsai/distributed-join/wiki/How-to-compile-and-run-the-code) contains step-by-step instructions for setting up the environment.
 
@@ -59,10 +60,14 @@ Partition the input tables into (over decomposition factor) * (number of GPUs) b
 used for computation-communication overlap. This argument has to be an integer >= 1. Higher number
 means smaller batch size. `1` means no overlap. Default: `1`.
 
+**--communicator [STR]**
+
+This option can be either "UCX" or "NCCL", which controls what communicator to use. Default: `UCX`.
+
 **--use-buffer-communicator**
 
-If this option is specified, communication goes through a pre-registered staging buffer. This option
-is recommeneded for IB system to reduce registration overhead.
+If this option is specified, UCX communication goes through a pre-registered staging buffer. This
+option is recommeneded for IB system to reduce registration overhead.
 
 ## Running
 

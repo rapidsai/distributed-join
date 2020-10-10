@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-#ifndef __COMMUNICATOR_CUH
-#define __COMMUNICATOR_CUH
+#pragma once
 
 #include <vector>
 #include <queue>
 #include <ucp/api/ucp.h>
 #include <mpi.h>
 #include <cstdint>
+#include <nccl.h>
 
 
 #define comm_handle_t void*
@@ -30,6 +30,8 @@
 class Communicator
 {
 
+// Note: There is no guarantee that communicators will be thread-safe.
+
 public:
 
 /**
@@ -37,6 +39,69 @@ public:
  * call this method at most once. In other word, multiple communicators are not supported.
  */
 virtual void initialize() = 0;
+
+/**
+ * Define the start point of a collective communication.
+ *
+ * Note: nested start/stop pairs are not supported and will lead to undefined behavior.
+ */
+virtual void start() = 0;
+
+/**
+ * Blocked until all communication since the *start* has been completed.
+ */
+virtual void stop() = 0;
+
+/**
+ * Send data to a remote rank.
+ *
+ * @param[in] buf           Data buffer to send to remote rank
+ * @param[in] count         Number of elements to send
+ * @param[in] element_size  Size of each element
+ * @param[in] dest          Destination rank
+ */
+virtual void send(const void *buf, int64_t count, int element_size, int dest) = 0;
+
+/**
+ * Receive data from a remote rank.
+ *
+ * @param[in] buf           Receive buffer to place received data into
+ * @param[in] count         Number of elements to receive
+ * @param[in] element_size  Size of each element
+ * @param[in] source        Source rank
+ */
+virtual void recv(void *buf, int64_t count, int element_size, int source) = 0;
+
+/**
+ * Close the endpoints, free up used communication resources, and stop the communication runtime.
+ */
+virtual void finalize() = 0;
+
+int mpi_rank;
+int mpi_size;
+int current_device;
+
+};
+
+
+class MPILikeCommunicator : public Communicator
+{
+
+// *MPILikeCommunicator* is an abstract class which implements the behavior of start/stop pairs
+// for communication libraries like MPI or UCX.
+
+// Note: For all tag send/recv operations, -1 is a reserved tag and should not be used
+// TODO: Enforce this assumption by runtime checking.
+
+public:
+
+virtual void initialize();
+
+virtual void start();
+
+virtual void stop();
+
+virtual void send(const void *buf, int64_t count, int element_size, int dest);
 
 /**
  * Send data to a remote rank asynchronously.
@@ -50,6 +115,8 @@ virtual void initialize() = 0;
  * @returns                 Communication handle for waiting. See 'wait' and 'waitall'.
  */
 virtual comm_handle_t send(const void *buf, int64_t count, int element_size, int dest, int tag) = 0;
+
+virtual void recv(void *buf, int64_t count, int element_size, int source);
 
 /**
  * Receive data from a remote rank asynchronously. Use this version if the receive size is known.
@@ -99,25 +166,23 @@ virtual void waitall(std::vector<comm_handle_t> requests) = 0;
  */
 virtual void waitall(std::vector<comm_handle_t>::const_iterator begin, std::vector<comm_handle_t>::const_iterator end) = 0;
 
-/**
- * Close the endpoints, free up used communication resources, and stop the communication runtime.
- */
-virtual void finalize() = 0;
-
-int mpi_rank;
-int mpi_size;
-int current_device;
+// used for keeping track of the pending requests since the last *start* call
+std::vector<comm_handle_t> pending_requests;
+// tag to use when no tag is explicitly supplied by the user
+static constexpr int reserved_tag {-1};
 
 };
 
 
-class UCXCommunicator: public Communicator
+class UCXCommunicator: public MPILikeCommunicator
 {
 
 public:
 
 virtual void initialize();
+using MPILikeCommunicator::send;
 virtual comm_handle_t send(const void *buf, int64_t count, int element_size, int dest, int tag);
+using MPILikeCommunicator::recv;
 virtual comm_handle_t recv(void *buf, int64_t count, int element_size, int source, int tag);
 virtual comm_handle_t recv(void **buf, int64_t *count, int element_size, int source, int tag);
 virtual void wait(comm_handle_t request);
@@ -161,7 +226,9 @@ virtual void setup_cache(int64_t ncaches, int64_t cache_size);
  */
 virtual void warmup_cache();
 
+using UCXCommunicator::send;
 virtual comm_handle_t send(const void *buf, int64_t count, int element_size, int dest, int tag);
+using UCXCommunicator::recv;
 virtual comm_handle_t recv(void *buf, int64_t count, int element_size, int source, int tag);
 virtual comm_handle_t recv(void **buf, int64_t *count, int element_size, int source, int tag);
 virtual void wait(comm_handle_t request);
@@ -252,4 +319,31 @@ UCXCommunicator* initialize_ucx_communicator(bool use_buffer_communicator,
                                              int64_t comm_buffer_size);
 
 
-#endif // __COMMUNICATOR_CUH
+class NCCLCommunicator : public Communicator
+{
+
+public:
+
+virtual void initialize();
+
+virtual void start();
+
+virtual void stop();
+
+virtual void send(const void *buf, int64_t count, int element_size, int dest);
+
+virtual void recv(void *buf, int64_t count, int element_size, int source);
+
+virtual void finalize();
+
+// Stream created/destroyed by the communicator object that is used for communication-related
+// kernels/copies
+cudaStream_t comm_stream;
+ncclComm_t nccl_comm;
+std::vector<void *> comm_buffers;  // used for 128-bit alignment
+// used for keeping track of size allocated in comm_buffers
+std::vector<std::size_t> comm_buffer_sizes;
+std::vector<void *> recv_buffers;
+std::vector<std::size_t> recv_buffer_idx;
+
+};
