@@ -102,23 +102,22 @@ send_data_by_offset(
 
 
 /**
- * Receive the data sent from 'send_data_by_offset'.
+ * Receive data sent by 'send_data_by_offset'.
  *
  * Note: This call should be enclosed by communicator->start() and communicator->stop().
  *
- * @param[out] data         The data received from each rank. This argument does not need to be preallocated, but the
- *                          caller is responsible for freeing this buffer using RMM. See
- *                          'merge_free_received_offset'.
- * @param[in] count         The number of items to be received from each rank.
- * @param[in] item_size     The size of each item. Used for passing to receive function in UCX.
+ * @param[out] data         Items received from all ranks will be placed contiguously in *data*.
+ *     This argument needs to be preallocated.
+ * @param[in] offset        The items received from rank i will be stored at the start of `data[offset[i]]`.
+ * @param[in] item_size     The size of each item.
  * @param[in] communicator  An instance of 'Communicator' used for communication.
- * @param[in] self_recv     Whether recving data from itself. If this argument is false, data[mpi_rank] will be nullptr
- *                          and bucket_count[mpi_rank] will be 0.
+ * @param[in] self_recv     Whether recving data from itself. If this argument is false, items in
+ *                          *data* from the current rank will not be received.
  */
 void
 recv_data_by_offset(
-    std::vector<void *> &data,
-    std::vector<int64_t> &count,
+    void *data,
+    std::vector<int64_t> const& offset,
     size_t item_size,
     Communicator *communicator,
     bool self_recv=true)
@@ -126,77 +125,15 @@ recv_data_by_offset(
     int mpi_rank {communicator->mpi_rank};
     int mpi_size {communicator->mpi_size};
 
-    data.resize(mpi_size, nullptr);
-
     for (int isource_rank = 0; isource_rank < mpi_size; isource_rank++) {
         if (!self_recv && mpi_rank == isource_rank)
             continue;
 
-        data[isource_rank] = rmm::mr::get_current_device_resource()->allocate(
-            count[isource_rank]*item_size, cudaStreamDefault
-        );
-
-        CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
-
-        communicator->recv(data[isource_rank], count[isource_rank], item_size, isource_rank);
-    }
-}
-
-
-/**
- * Merge received buckets into a single buffer, and free all received buckets.
- *
- * @param[in] received_data        Vector with length of number of ranks, where the ith entry has the data received
- *                                 from rank i. Buffers contained in this argument will be freed in this function. Also
- *                                 see 'recv_data_by_offset'.
- * @param[in] bucket_count         Vector with length of number of ranks, where the ith entry represents the the number
- *                                 of elements of received_data[i].
- * @param[in] item_size            The size of each element.
- * @param[out] total_count         The number of elements in the merged buffer returned from this function. It is the
- *                                 sum of bucket_count.
- *
- * @returns                        Merged device buffer.
- */
-rmm::device_buffer
-merge_free_received_offset(
-    std::vector<void *> const& received_data,
-    std::vector<int64_t> const& bucket_count,
-    size_t item_size,
-    int64_t &total_count,
-    Communicator *communicator,
-    bool self_free=true)
-{
-    total_count = 0LL;
-
-    for (auto count : bucket_count) {
-        total_count += count;
-    }
-
-    auto merged_data = rmm::device_buffer(total_count * item_size);
-
-    void* current_data = merged_data.data();
-
-    for (int irank = 0; irank < bucket_count.size(); irank++) {
-        CUDA_RT_CALL(cudaMemcpy(
-            current_data, received_data[irank], bucket_count[irank] * item_size, cudaMemcpyDeviceToDevice
-        ));
-
-        current_data = (void *)((char *)current_data + bucket_count[irank] * item_size);
-    }
-
-    for (int irank = 0; irank < received_data.size(); irank ++) {
-        if (!self_free && irank == communicator->mpi_rank)
-            continue;
-
-        rmm::mr::get_current_device_resource()->deallocate(
-            received_data[irank], bucket_count[irank] * item_size, cudaStreamDefault
+        communicator->recv(
+            (void *)((char *)data + offset[isource_rank] * item_size),
+            offset[isource_rank + 1] - offset[isource_rank], item_size, isource_rank
         );
     }
-
-    CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
-
-    return merged_data;
 }
-
 
 #endif // __COMM_CUH

@@ -209,11 +209,11 @@ generate_tables_distributed(
 
     // Send each bucket to the desired target rank
 
-    std::unique_ptr<table> build_table = all_to_all_comm_single_batch(
+    std::unique_ptr<table> build_table = all_to_all_comm(
         pre_shuffle_build_table->view(), build_table_offset, communicator
     );
 
-    std::unique_ptr<table> probe_table = all_to_all_comm_single_batch(
+    std::unique_ptr<table> probe_table = all_to_all_comm(
         pre_shuffle_probe_table->view(), probe_table_offset, communicator
     );
 
