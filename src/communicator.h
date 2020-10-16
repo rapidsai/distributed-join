@@ -53,6 +53,12 @@ virtual void start() = 0;
 virtual void stop() = 0;
 
 /**
+ * If the communicator uses tag internally, this method provides a way for the user to get a new tag
+ * to avoid conflicts.
+ */
+virtual void use_new_tag() {};
+
+/**
  * Send data to a remote rank.
  *
  * @param[in] buf           Data buffer to send to remote rank
@@ -90,7 +96,8 @@ class MPILikeCommunicator : public Communicator
 // *MPILikeCommunicator* is an abstract class which implements the behavior of start/stop pairs
 // for communication libraries like MPI or UCX.
 
-// Note: For all tag send/recv operations, -1 is a reserved tag and should not be used
+// Note: For all tag send/recv operations, tags above 1024 are reserved for group send/recv, and
+// should not be used as a user tag.
 // TODO: Enforce this assumption by runtime checking.
 
 public:
@@ -100,6 +107,8 @@ virtual void initialize();
 virtual void start();
 
 virtual void stop();
+
+virtual void use_new_tag();
 
 virtual void send(const void *buf, int64_t count, int element_size, int dest);
 
@@ -168,8 +177,8 @@ virtual void waitall(std::vector<comm_handle_t>::const_iterator begin, std::vect
 
 // used for keeping track of the pending requests since the last *start* call
 std::vector<comm_handle_t> pending_requests;
-// tag to use when no tag is explicitly supplied by the user
-static constexpr int reserved_tag {-1};
+// tag to use for group calls
+int reserved_tag;
 
 };
 

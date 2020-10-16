@@ -207,15 +207,49 @@ generate_tables_distributed(
         probe_table_offset[irank] = probe_table_nrows_per_rank / mpi_size * irank;
     }
 
+    // Allocate memory for the result tables
+
+    vector<int64_t> build_table_recv_offset;
+    vector<int64_t> probe_table_recv_offset;
+
+    communicate_sizes(build_table_offset, build_table_recv_offset, communicator);
+    communicate_sizes(probe_table_offset, probe_table_recv_offset, communicator);
+
+    vector<std::unique_ptr<column> > build_table_columns;
+    for (cudf::size_type icol = 0; icol < pre_shuffle_build_table->num_columns(); icol++) {
+        build_table_columns.push_back(make_numeric_column(
+            pre_shuffle_build_table->view().column(icol).type(),
+            build_table_recv_offset.back()
+        ));
+    }
+    std::unique_ptr<table> build_table = std::make_unique<table>(std::move(build_table_columns));
+
+    vector<std::unique_ptr<column> > probe_table_columns;
+    for (cudf::size_type icol = 0; icol < pre_shuffle_probe_table->num_columns(); icol++) {
+        probe_table_columns.push_back(make_numeric_column(
+            pre_shuffle_probe_table->view().column(icol).type(),
+            probe_table_recv_offset.back()
+        ));
+    }
+    std::unique_ptr<table> probe_table = std::make_unique<table>(std::move(probe_table_columns));
+
+    CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
+
     // Send each bucket to the desired target rank
 
-    std::unique_ptr<table> build_table = all_to_all_comm(
-        pre_shuffle_build_table->view(), build_table_offset, communicator
+    communicator->start();
+
+    all_to_all_comm(
+        pre_shuffle_build_table->view(), build_table->mutable_view(),
+        build_table_offset, build_table_recv_offset, communicator
     );
 
-    std::unique_ptr<table> probe_table = all_to_all_comm(
-        pre_shuffle_probe_table->view(), probe_table_offset, communicator
+    all_to_all_comm(
+        pre_shuffle_probe_table->view(), probe_table->mutable_view(),
+        probe_table_offset, probe_table_recv_offset, communicator
     );
+
+    communicator->stop();
 
     return std::make_pair(std::move(build_table), std::move(probe_table));
 }

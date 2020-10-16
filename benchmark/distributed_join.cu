@@ -158,7 +158,7 @@ int main(int argc, char *argv[])
     Communicator* communicator;
     if (COMMUNICATOR_NAME == "UCX") {
         communicator = initialize_ucx_communicator(
-            USE_BUFFER_COMMUNICATOR, 2 * mpi_size, 800'000'000LL / mpi_size - 100'000LL
+            USE_BUFFER_COMMUNICATOR, 2 * mpi_size * 4, 200'000'000LL / mpi_size - 100'000LL
         );
     } else if (COMMUNICATOR_NAME == "NCCL") {
         communicator = new NCCLCommunicator;

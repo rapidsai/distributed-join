@@ -18,13 +18,8 @@
 #define __COMM_CUH
 
 #include <vector>
-#include <ucp/api/ucp.h>
 #include <mpi.h>
-#include <cassert>
-
 #include <cudf/types.hpp>
-#include <rmm/device_buffer.hpp>
-#include <rmm/mr/device/per_device_resource.hpp>
 
 #include "communicator.h"
 #include "error.cuh"

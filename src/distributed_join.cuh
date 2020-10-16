@@ -110,74 +110,42 @@ communicate_sizes(
 /**
  * All-to-all communication of a single batch.
  *
+ * Note: This call is nonblocking and should be enclosed by `communicator->start()` and
+ * `communicator->stop()`.
+ *
  * This function needs to be called collectively by all ranks in MPI_COMM_WORLD. For every ranks,
  * all arguments are significant.
  *
  * @param[in] input Table to be communicated.
- * @param[in] offset Vector of length `mpi_size + 1` such that `offset[i]` represents the start
- * index of `input` to be sent to rank `i`.
+ * @param[out] output Table after all-to-all communication. This argument needs to be preallocated.
+ * @param[in] send_offset Vector of size `mpi_size + 1` such that `send_offset[i]` represents the
+ * start index of `input` to be sent to rank `i`.
+ * @param[in] recv_offset Vector of size `mpi_size + 1` such that `recv_offset[i]` represents the
+ * start index of `output` to receive data from rank `i`.
  * @param[in] communicator An instance of `Communicator` used for communication.
- * @param[in] self_copy_stream A CUDA stream used for copying data to the same rank.
- *
- * @return Table after all-to-all communication.
+ * @param[in] include_self If true, this function will send the partition destined to the current
+ * rank.
  */
-std::unique_ptr<table>
+void
 all_to_all_comm(
     cudf::table_view input,
-    vector<cudf::size_type> const& offset,
+    cudf::mutable_table_view output,
+    vector<cudf::size_type> const& send_offset,
+    vector<int64_t> const& recv_offset,
     Communicator *communicator,
-    cudaStream_t self_copy_stream = 0)
+    bool include_self = true)
 {
-    vector<int64_t> recv_offset;
-    communicate_sizes(offset, recv_offset, communicator);
-
-    vector<std::unique_ptr<column> > communicated_columns;
-
-    // In this function, offset has type cudf::size_type. In send_data_by_offset, offset has type
-    // int. This assert ensures these two types are compatible.
-    static_assert(
-        std::is_same<int, cudf::size_type>::value,
-        "int and size_type are not the same"
-    );
-
     for (cudf::size_type icol = 0; icol < input.num_columns(); icol++) {
-        cudf::data_type dtype = input.column(icol).type();
-        cudf::size_type dtype_size = cudf::size_of(dtype);
-
-        communicated_columns.push_back(make_numeric_column(dtype, recv_offset.back()));
-
-        CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
-
-        communicator->start();
-
-        // communicate with other ranks
+            cudf::data_type dtype = input.column(icol).type();
+            cudf::size_type dtype_size = cudf::size_of(dtype);
         send_data_by_offset(
-            input.column(icol).head(), offset, dtype_size, communicator, false
-        );
+            input.column(icol).head(), send_offset, dtype_size, communicator, include_self);
 
         recv_data_by_offset(
-            communicated_columns[icol]->mutable_view().head(),
-            recv_offset, dtype_size, communicator, false
-        );
+            output.column(icol).head(), recv_offset, dtype_size, communicator, include_self);
 
-        communicator->stop();
-
-        // Copy data directly from input buffer to output buffer of the same rank.
-        // No communication is necessary.
-        int mpi_rank { communicator->mpi_rank };
-        CUDA_RT_CALL( cudaMemcpyAsync(
-            (void *)((char *)(communicated_columns[icol]->mutable_view().head())
-                     + recv_offset[mpi_rank] * dtype_size),
-            (void *)((char *)(input.column(icol).head()) + offset[mpi_rank] * dtype_size),
-            (recv_offset[mpi_rank + 1] - recv_offset[mpi_rank]) * dtype_size,
-            cudaMemcpyDeviceToDevice,
-            self_copy_stream)
-        );
+        communicator->use_new_tag();
     }
-
-    CUDA_RT_CALL( cudaStreamSynchronize(self_copy_stream) );
-
-    return std::make_unique<table>(std::move(communicated_columns));
 }
 
 
@@ -297,7 +265,8 @@ distributed_inner_join(
         // we can get away with using just one thread.
     }
 
-    int mpi_size = communicator->mpi_size;
+    int mpi_rank { communicator->mpi_rank };
+    int mpi_size { communicator->mpi_size };
     std::chrono::time_point<high_resolution_clock> start_time;
     std::chrono::time_point<high_resolution_clock> stop_time;
 
@@ -333,24 +302,29 @@ distributed_inner_join(
     if (report_timing) {
         stop_time = high_resolution_clock::now();
         auto duration = duration_cast<milliseconds>(stop_time - start_time);
-        std::cerr << "Rank " << communicator->mpi_rank << ": Hash partition takes "
-                  << duration.count() << "ms" << std::endl;
+        std::cerr << "Rank " << mpi_rank << ": Hash partition takes " << duration.count() << "ms"
+                  << std::endl;
     }
 
-    /* Get column data types */
+    /* Communicate the offsets of each batch */
 
-    cudf::size_type nleft_columns = hashed_left->num_columns();
-    cudf::size_type nright_columns = hashed_right->num_columns();
+    // `recv_offsets[i, j]` represents the number of items received from rank `j` in batch `i`
+    vector<vector<int64_t> > recv_offsets_left(over_decom_factor);
+    vector<vector<int64_t> > recv_offsets_right(over_decom_factor);
 
-    vector<cudf::data_type> left_dtypes(nleft_columns);
-    vector<cudf::data_type> right_dtypes(nright_columns);
+    for (int ibatch = 0; ibatch < over_decom_factor; ibatch++) {
+        size_t start_idx = ibatch * mpi_size;
+        size_t end_idx = (ibatch + 1) * mpi_size + 1;
 
-    for (int icol = 0; icol < nleft_columns; icol ++) {
-        left_dtypes[icol] = hashed_left->view().column(icol).type();
-    }
+        communicate_sizes(
+            vector<cudf::size_type>(&left_offset[start_idx], &left_offset[end_idx]),
+            recv_offsets_left[ibatch], communicator
+        );
 
-    for (int icol = 0; icol < nright_columns; icol ++) {
-        right_dtypes[icol] = hashed_right->view().column(icol).type();
+        communicate_sizes(
+            vector<cudf::size_type>(&right_offset[start_idx], &right_offset[end_idx]),
+            recv_offsets_right[ibatch], communicator
+        );
     }
 
     /* Declare storage for the table after all-to-all communication */
@@ -359,6 +333,27 @@ distributed_inner_join(
     vector<std::unique_ptr<table> > communicated_left(over_decom_factor);
     // right table after all-to-all for each batch
     vector<std::unique_ptr<table> > communicated_right(over_decom_factor);
+
+    for (int ibatch = 0; ibatch < over_decom_factor; ibatch++) {
+        vector<std::unique_ptr<column> > communicated_left_columns;
+        for (cudf::size_type icol = 0; icol < hashed_left->num_columns(); icol++) {
+            communicated_left_columns.push_back(cudf::make_numeric_column(
+                hashed_left->view().column(icol).type(),
+                recv_offsets_left[ibatch].back()));
+        }
+        communicated_left[ibatch] = std::make_unique<table>(std::move(communicated_left_columns));
+
+        vector<std::unique_ptr<column> > communicated_right_columns;
+        for (cudf::size_type icol = 0; icol < hashed_right->num_columns(); icol++) {
+            communicated_right_columns.push_back(cudf::make_numeric_column(
+                hashed_right->view().column(icol).type(),
+                recv_offsets_right[ibatch].back()));
+        }
+        communicated_right[ibatch] = std::make_unique<table>(std::move(communicated_right_columns));
+    }
+
+    CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
+
     // *flags* indicates whether each batch has finished communication
     // *flags* uses std::atomic because unsynchronized access to an object which is modified in one
     // thread and read in another is undefined behavior.
@@ -369,6 +364,40 @@ distributed_inner_join(
         flag = false;
     }
 
+    /* Copy from hashed table to communicated table for the current rank */
+
+    for (int ibatch = 0; ibatch < over_decom_factor; ibatch++) {
+        for (cudf::size_type icol = 0; icol < hashed_left->num_columns(); icol++) {
+            cudf::data_type dtype = hashed_left->view().column(icol).type();
+            cudf::size_type dtype_size = cudf::size_of(dtype);
+
+            CUDA_RT_CALL( cudaMemcpy(
+                (void *)((char *)(communicated_left[ibatch]->mutable_view().column(icol).head())
+                        + recv_offsets_left[ibatch][mpi_rank] * dtype_size),
+                (void *)((char *)(hashed_left->view().column(icol).head())
+                        + left_offset[ibatch * mpi_size + mpi_rank] * dtype_size),
+                (recv_offsets_left[ibatch][mpi_rank + 1] - recv_offsets_left[ibatch][mpi_rank])
+                * dtype_size,
+                cudaMemcpyDeviceToDevice)
+            );
+        }
+
+        for (cudf::size_type icol = 0; icol < hashed_right->num_columns(); icol++) {
+            cudf::data_type dtype = hashed_right->view().column(icol).type();
+            cudf::size_type dtype_size = cudf::size_of(dtype);
+
+            CUDA_RT_CALL( cudaMemcpy(
+                (void *)((char *)(communicated_right[ibatch]->mutable_view().column(icol).head())
+                        + recv_offsets_right[ibatch][mpi_rank] * dtype_size),
+                (void *)((char *)(hashed_right->view().column(icol).head())
+                        + right_offset[ibatch * mpi_size + mpi_rank] * dtype_size),
+                (recv_offsets_right[ibatch][mpi_rank + 1] - recv_offsets_right[ibatch][mpi_rank])
+                * dtype_size,
+                cudaMemcpyDeviceToDevice)
+            );
+        }
+    }
+
     /* Launch inner join thread */
 
     std::thread inner_join_thread(
@@ -377,14 +406,6 @@ distributed_inner_join(
         std::ref(batch_join_results), left_on, right_on, columns_in_common,
         std::ref(flags), communicator, report_timing, rmm::mr::get_current_device_resource()
     );
-
-    /* Create a priority stream for copying from hash partitioned to communicated table for the same rank */
-    cudaStream_t self_copy_stream;
-    int least_priority;
-    int greatest_priority;
-    CUDA_RT_CALL( cudaDeviceGetStreamPriorityRange(&least_priority, &greatest_priority) );
-    CUDA_RT_CALL(
-        cudaStreamCreateWithPriority(&self_copy_stream, cudaStreamNonBlocking, greatest_priority) );
 
     /* Use the current thread for all-to-all communication */
 
@@ -399,17 +420,23 @@ distributed_inner_join(
         size_t end_idx = (ibatch + 1) * mpi_size + 1;
 
         // all-to-all communication for the ibatch
-        communicated_left[ibatch] = all_to_all_comm(
-            hashed_left->view(),
+        communicator->start();
+
+        all_to_all_comm(
+            hashed_left->view(), communicated_left[ibatch]->mutable_view(),
             vector<cudf::size_type>(&left_offset[start_idx], &left_offset[end_idx]),
-            communicator, self_copy_stream
+            recv_offsets_left[ibatch],
+            communicator, false
         );
 
-        communicated_right[ibatch] = all_to_all_comm(
-            hashed_right->view(),
+        all_to_all_comm(
+            hashed_right->view(), communicated_right[ibatch]->mutable_view(),
             vector<cudf::size_type>(&right_offset[start_idx], &right_offset[end_idx]),
-            communicator, self_copy_stream
+            recv_offsets_right[ibatch],
+            communicator, false
         );
+
+        communicator->stop();
 
         // mark the communication of ibatch as finished.
         // the join thread is safe to start performing local join on ibatch
@@ -418,12 +445,10 @@ distributed_inner_join(
         if (report_timing) {
             stop_time = high_resolution_clock::now();
             auto duration = duration_cast<milliseconds>(stop_time - start_time);
-            std::cerr << "Rank " << communicator->mpi_rank << ": All-to-all communication on batch "
+            std::cerr << "Rank " << mpi_rank << ": All-to-all communication on batch "
                       << ibatch << " takes " << duration.count() << "ms" << std::endl;
         }
     }
-
-    CUDA_RT_CALL( cudaStreamDestroy(self_copy_stream) );
 
     // hashed left and right tables should not be needed now
     hashed_left.reset();
