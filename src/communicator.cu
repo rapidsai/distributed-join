@@ -216,6 +216,24 @@ comm_handle_t UCXCommunicator::recv(void **buf, int64_t *count, int element_size
 }
 
 
+void UCXCommunicator::register_buffer(void *buf, size_t size, ucp_mem_h* memory_handle)
+{
+    ucp_mem_map_params_t mem_map_params;
+    memset(&mem_map_params, 0, sizeof(ucp_mem_map_params_t));
+    mem_map_params.field_mask = UCP_MEM_MAP_PARAM_FIELD_ADDRESS | UCP_MEM_MAP_PARAM_FIELD_LENGTH;
+    mem_map_params.address    = buf;
+    mem_map_params.length     = size;
+
+    UCX_CALL( ucp_mem_map(ucp_context, &mem_map_params, memory_handle) );
+}
+
+
+void UCXCommunicator::deregister_buffer(ucp_mem_h memory_handle)
+{
+    UCX_CALL( ucp_mem_unmap(ucp_context, memory_handle) );
+}
+
+
 void UCXCommunicator::wait(comm_handle_t request)
 {
     ucs_status_t ucx_status;

@@ -194,6 +194,20 @@ virtual comm_handle_t send(const void *buf, int64_t count, int element_size, int
 using MPILikeCommunicator::recv;
 virtual comm_handle_t recv(void *buf, int64_t count, int element_size, int source, int tag);
 virtual comm_handle_t recv(void **buf, int64_t *count, int element_size, int source, int tag);
+/**
+ * Register a buffer through UCX.
+ *
+ * @param[in] buf               Buffer to be registered.
+ * @param[in] size              Size in byte to register.
+ * @param[out] memory_handle    Memory handle to the registered buffer.
+ */
+virtual void register_buffer(void *buf, size_t size, ucp_mem_h* memory_handle);
+/**
+ * Deregister a buffer through UCX.
+ *
+ * @param[in] memory_handle     Memory handle of which the associated buffer will be deregistered.
+ */
+virtual void deregister_buffer(ucp_mem_h memory_handle);
 virtual void wait(comm_handle_t request);
 virtual void waitall(std::vector<comm_handle_t> requests);
 virtual void waitall(std::vector<comm_handle_t>::const_iterator begin, std::vector<comm_handle_t>::const_iterator end);
