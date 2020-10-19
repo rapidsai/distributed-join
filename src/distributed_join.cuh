@@ -138,13 +138,17 @@ all_to_all_comm(
     for (cudf::size_type icol = 0; icol < input.num_columns(); icol++) {
             cudf::data_type dtype = input.column(icol).type();
             cudf::size_type dtype_size = cudf::size_of(dtype);
+        if (!communicator->group_by_batch())
+            communicator->start();
+
         send_data_by_offset(
             input.column(icol).head(), send_offset, dtype_size, communicator, include_self);
 
         recv_data_by_offset(
             output.column(icol).head(), recv_offset, dtype_size, communicator, include_self);
 
-        communicator->use_new_tag();
+        if (!communicator->group_by_batch())
+            communicator->stop();
     }
 }
 
@@ -366,6 +370,11 @@ distributed_inner_join(
 
     /* Copy from hashed table to communicated table for the current rank */
 
+    // These device-to-device memory copies are performed explicitly here before all-to-all
+    // communication and local join, because if they are part of the communication, they could block
+    // the host thread (even if they are launched on different streams) while the local join kernel
+    // is running, limiting the efficacy of overlapping.
+
     for (int ibatch = 0; ibatch < over_decom_factor; ibatch++) {
         for (cudf::size_type icol = 0; icol < hashed_left->num_columns(); icol++) {
             cudf::data_type dtype = hashed_left->view().column(icol).type();
@@ -420,7 +429,8 @@ distributed_inner_join(
         size_t end_idx = (ibatch + 1) * mpi_size + 1;
 
         // all-to-all communication for the ibatch
-        communicator->start();
+        if (communicator->group_by_batch())
+            communicator->start();
 
         all_to_all_comm(
             hashed_left->view(), communicated_left[ibatch]->mutable_view(),
@@ -436,7 +446,8 @@ distributed_inner_join(
             communicator, false
         );
 
-        communicator->stop();
+        if (communicator->group_by_batch())
+            communicator->stop();
 
         // mark the communication of ibatch as finished.
         // the join thread is safe to start performing local join on ibatch

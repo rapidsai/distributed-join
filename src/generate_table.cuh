@@ -237,7 +237,8 @@ generate_tables_distributed(
 
     // Send each bucket to the desired target rank
 
-    communicator->start();
+    if (communicator->group_by_batch())
+        communicator->start();
 
     all_to_all_comm(
         pre_shuffle_build_table->view(), build_table->mutable_view(),
@@ -249,7 +250,8 @@ generate_tables_distributed(
         probe_table_offset, probe_table_recv_offset, communicator
     );
 
-    communicator->stop();
+    if (communicator->group_by_batch())
+        communicator->stop();
 
     return std::make_pair(std::move(build_table), std::move(probe_table));
 }

@@ -124,7 +124,8 @@ int main(int argc, char *argv[])
     MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
 
     UCXCommunicator* communicator = initialize_ucx_communicator(
-        true, 2 * mpi_size * 4, 100'000LL
+        // *2 because buffers are needed for both sends and receives
+        true, 2 * mpi_size, 100'000LL
     );
 
     /* Generate input tables */

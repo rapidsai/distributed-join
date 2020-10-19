@@ -50,6 +50,7 @@ static bool IS_BUILD_TABLE_KEY_UNIQUE = true;
 static int OVER_DECOMPOSITION_FACTOR = 1;
 static std::string COMMUNICATOR_NAME = "UCX";
 static bool USE_BUFFER_COMMUNICATOR = false;
+static int64_t COMMUNICATOR_BUFFER_SIZE = 1'600'000'000LL;
 
 
 void parse_command_line_arguments(int argc, char *argv[])
@@ -157,8 +158,11 @@ int main(int argc, char *argv[])
 
     Communicator* communicator;
     if (COMMUNICATOR_NAME == "UCX") {
+        // *2 because buffers are needed for both sends and receives
+        const int num_comm_buffers = 2 * mpi_size;
         communicator = initialize_ucx_communicator(
-            USE_BUFFER_COMMUNICATOR, 2 * mpi_size * 4, 200'000'000LL / mpi_size - 100'000LL
+            USE_BUFFER_COMMUNICATOR, num_comm_buffers,
+            COMMUNICATOR_BUFFER_SIZE / num_comm_buffers - 100'000LL
         );
     } else if (COMMUNICATOR_NAME == "NCCL") {
         communicator = new NCCLCommunicator;

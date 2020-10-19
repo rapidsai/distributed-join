@@ -39,7 +39,6 @@ void Communicator::initialize()
 void MPILikeCommunicator::initialize()
 {
     Communicator::initialize();
-    reserved_tag = 1025;
 }
 
 
@@ -52,11 +51,6 @@ void MPILikeCommunicator::start()
 void MPILikeCommunicator::stop()
 {
     waitall(pending_requests);
-}
-
-void MPILikeCommunicator::use_new_tag()
-{
-    reserved_tag++;
 }
 
 
