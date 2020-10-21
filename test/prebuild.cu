@@ -124,6 +124,7 @@ int main(int argc, char *argv[])
     MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
 
     UCXCommunicator* communicator = initialize_ucx_communicator(
+        // *2 because buffers are needed for both sends and receives
         true, 2 * mpi_size, 100'000LL
     );
 
@@ -140,6 +141,8 @@ int main(int argc, char *argv[])
 
         left_view = left_table->view();
         right_view = right_table->view();
+
+        CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
     }
 
     /* Distribute input tables among ranks */

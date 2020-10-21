@@ -179,6 +179,8 @@ distribute_table(
         local_table.push_back(std::move(new_column));
     }
 
+    CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
+
     /* Send table from the root rank to all ranks */
 
     for (int icol = 0; icol < ncols; icol++) {
@@ -244,6 +246,8 @@ collect_tables(
                 cudf::make_numeric_column(table.column(icol).type(), table_nrows_scan.back())
             ));
         }
+
+        CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
     }
 
     /* Send table from each rank to root */

@@ -26,6 +26,7 @@
 #include <type_traits>
 #include <chrono>
 #include <iostream>
+#include <numeric>
 
 #include <cudf/types.hpp>
 #include <cudf/column/column.hpp>
@@ -54,26 +55,28 @@ using std::chrono::milliseconds;
 /**
  * Communicate number of elements recieved from each rank during all-to-all communication.
  *
- * @param[in] send_offset Vector of length mpi_size + 1 such that send_count[i+1] - send_count[i]
- * is the number of elements sent from the current rank to rank i during the all-to-all
- * communication.
- * @param[out] recv_count Vector of length mpi_size such that recv_count[i] is the number of
- * elements received from rank i during the all-to-all communication.
+ * Note: This function needs to be called collectively by all ranks in MPI_COMM_WORLD.
+ *
+ * @param[in] send_offset Vector of length mpi_size + 1 such that `send_offset[i+1] - send_offset[i]`
+ * is the number of elements sent from the current rank to rank i during the all-to-all communication.
+ * @param[out] recv_offset Vector of length mpi_size + 1 such that `recv_offset[i+1] - recv_offset[i]`
+ * is the number of elements received from rank i during the all-to-all communication. The vector will
+ * be resized in this function and does not need to be preallocated.
  */
 void
 communicate_sizes(
-    vector<cudf::size_type> const& offset,
-    vector<int64_t> &recv_count,
+    vector<cudf::size_type> const& send_offset,
+    vector<int64_t> &recv_offset,
     Communicator *communicator)
 {
     int mpi_size = communicator->mpi_size;
     vector<int64_t> send_count(mpi_size, -1);
 
     for (int irank = 0; irank < mpi_size; irank++) {
-        send_count[irank] = offset[irank + 1] - offset[irank];
+        send_count[irank] = send_offset[irank + 1] - send_offset[irank];
     }
 
-    recv_count.resize(mpi_size, -1);
+    vector<int64_t> recv_count(mpi_size, -1);
 
     // Note: MPI is used for communicating the sizes instead of *Communicator* because
     // *Communicator* is not guaranteed to be able to send/recv host buffers.
@@ -97,174 +100,64 @@ communicate_sizes(
 
     MPI_CALL( MPI_Waitall(mpi_size, send_req.data(), MPI_STATUSES_IGNORE) );
     MPI_CALL( MPI_Waitall(mpi_size, recv_req.data(), MPI_STATUSES_IGNORE) );
+
+    recv_offset.resize(mpi_size + 1, -1);
+    recv_offset[0] = 0;
+    std::partial_sum(recv_count.begin(), recv_count.end(), recv_offset.begin() + 1);
 }
 
 
 /**
- * All-to-all communication of a single batch without merging.
+ * All-to-all communication of a single batch.
  *
- * For distributed join with overlapping communication and computation, this function can be used
- * in the communication thread, while the merging can be performed inside the local join thread.
- * This is necessary because merging involves device-to-device copy, which uses SM.
+ * Note: This call is nonblocking and should be enclosed by `communicator->start()` and
+ * `communicator->stop()`.
  *
  * This function needs to be called collectively by all ranks in MPI_COMM_WORLD. For every ranks,
  * all arguments are significant.
  *
- * @param[in] hashed Rearranged table by hash function.
- * @param[in] offset Vector of length mpi_size + 1 such that offset[i] represents the start index
- * of bucket i in `hashed`.
- * @param[out] local_buckets The received table from each rank. local_buckets[i][j] points to the
- * data from rank j of column i. This argument does not need to be preallocated, but the caller is
- * responsible for freeing this buffer using RMM.
- * @param[out] recv_nrows The number of rows received from each rank. recv_nrows[i] stores the
- * number of rows received from rank i.
+ * @param[in] input Table to be communicated.
+ * @param[out] output Table after all-to-all communication. This argument needs to be preallocated.
+ * @param[in] send_offset Vector of size `mpi_size + 1` such that `send_offset[i]` represents the
+ * start index of `input` to be sent to rank `i`.
+ * @param[in] recv_offset Vector of size `mpi_size + 1` such that `recv_offset[i]` represents the
+ * start index of `output` to receive data from rank `i`.
  * @param[in] communicator An instance of `Communicator` used for communication.
- *
- * @TODO: Use unique_ptr for managing the lifetime of `local_buckets`.
+ * @param[in] include_self If true, this function will send the partition destined to the current
+ * rank.
  */
 void
 all_to_all_comm(
-    cudf::table_view hashed,
-    vector<cudf::size_type> const& offset,
-    vector<vector<void *> > &local_buckets,  // [icol, ibucket]
-    vector<int64_t> &recv_nrows,
-    Communicator *communicator)
+    cudf::table_view input,
+    cudf::mutable_table_view output,
+    vector<cudf::size_type> const& send_offset,
+    vector<int64_t> const& recv_offset,
+    Communicator *communicator,
+    bool include_self = true)
 {
-    int mpi_rank {communicator->mpi_rank};
+    for (cudf::size_type icol = 0; icol < input.num_columns(); icol++) {
+            cudf::data_type dtype = input.column(icol).type();
+            cudf::size_type dtype_size = cudf::size_of(dtype);
+        if (!communicator->group_by_batch())
+            communicator->start();
 
-    communicate_sizes(offset, recv_nrows, communicator);
-
-    local_buckets.resize(hashed.num_columns());
-
-    // In this function, offset has type cudf::size_type. In send_data_by_offset, offset has type
-    // int. This assert ensures these two types are compatible.
-    static_assert(
-        std::is_same<int, cudf::size_type>::value,
-        "int and size_type are not the same"
-    );
-
-    for (cudf::size_type icol = 0; icol < hashed.num_columns(); icol++) {
-        cudf::size_type dtype_size = cudf::size_of(hashed.column(icol).type());
-
-        communicator->start();
-
-        // communicate with other ranks
         send_data_by_offset(
-            hashed.column(icol).head(), offset, dtype_size, communicator, false
-        );
+            input.column(icol).head(), send_offset, dtype_size, communicator, include_self);
 
         recv_data_by_offset(
-            local_buckets[icol], recv_nrows, dtype_size, communicator, false
-        );
+            output.column(icol).head(), recv_offset, dtype_size, communicator, include_self);
 
-        // For bucket to the rank itself, simply compute the pointer to the right location.
-        // No communication is necesssary.
-        local_buckets[icol][mpi_rank] = (void *)(hashed.column(icol).head<char>()
-                                                 + offset[mpi_rank] * dtype_size);
-
-        communicator->stop();
+        if (!communicator->group_by_batch())
+            communicator->stop();
     }
-}
-
-/**
- * Merge and free the received buckets from 'all_to_all_comm'.
- *
- * @param[in] buckets Received table from each rank during 'all_to_all_comm'. The device buffer
- * inside will be freed by this function.
- * @param[in] counts Number of items received from each rank, got from 'all_to_all_comm'.
- * @param[in] dtypes Column types
- *
- * @return Table formed by merging all buckets in *buckets*.
- */
-std::unique_ptr<table>
-all_to_all_merge_data(
-    vector<vector<void *> > const& buckets,
-    vector<int64_t> const& counts,
-    vector<cudf::data_type> const& dtypes,
-    Communicator *communicator)
-{
-    vector<std::unique_ptr<column> > merged_table;
-
-    for (int icol = 0; icol < buckets.size(); icol++) {
-        size_t dtype_size = cudf::size_of(dtypes[icol]);
-
-        int64_t total_count;
-        rmm::device_buffer merged_data = merge_free_received_offset(
-            buckets[icol], counts, dtype_size, total_count, communicator, false
-        );
-
-        merged_table.push_back(std::make_unique<column>(dtypes[icol], total_count, std::move(merged_data)));
-    }
-
-    return std::make_unique<table>(std::move(merged_table));
-}
-
-
-/**
- * All-to-all communication with merging for a single batch.
- *
- * This function needs to be called collectively by all ranks in MPI_COMM_WORLD. For every ranks,
- * all arguments are significant.
- *
- * @param[in] input Input table to be communicated.
- * @param[in] offset Vector of length mpi_size + 1 such that offset[i] represents the starting row
- * index of bucket i in `input`.
- * @param[in] communicator An instance of `Communicator` used for communication.
- *
- * @return The communication result which gathers bucket i of `input` on rank i.
- */
-std::unique_ptr<table>
-all_to_all_comm_single_batch(
-    cudf::table_view input,
-    vector<cudf::size_type> const& offset,
-    Communicator *communicator)
-{
-    vector<int64_t> recv_nrows;
-    communicate_sizes(offset, recv_nrows, communicator);
-
-    vector<std::unique_ptr<column> > recv_columns;
-
-    for (cudf::size_type icol = 0; icol < input.num_columns(); icol++) {
-
-        std::size_t dtype_size = cudf::size_of(input.column(icol).type());
-
-        communicator->start();
-
-        send_data_by_offset(input.column(icol).head(), offset, dtype_size, communicator);
-
-        vector<void *> recv_data;
-
-        recv_data_by_offset(recv_data, recv_nrows, dtype_size, communicator);
-
-        communicator->stop();
-
-        int64_t nrows;
-        rmm::device_buffer merged_data = merge_free_received_offset(
-            recv_data, recv_nrows, dtype_size, nrows, communicator
-        );
-
-        recv_columns.push_back(std::make_unique<column>(
-            input.column(icol).type(), nrows, std::move(merged_data))
-        );
-    }
-
-    return std::make_unique<table>(std::move(recv_columns));
 }
 
 
 /**
  * Local join thread used for merging incoming partitions and performing local joins.
  *
- * @param[in] left_buckets Received partitions of the left table from remote GPUs.
- *     *left_buckets[i, j, k]* contains a pointer to the ith batch, jth column and kth partition.
- * @param[in] left_counts *left_counts[i, j]* stores the number of rows for jth partition in ith
- *     batch of the left table.
- * @param[in] left_dtypes Column data types of the left table.
- * @param[in] right_buckets Received partitions of the right table from remote GPUs.
- *     *right_buckets[i, j, k]* contains a pointer to the ith batch, jth column and kth partition.
- * @param[in] right_counts *right_counts[i, j]* stores the number of rows for jth partition in ith
- *     batch of the right table.
- * @param[in] right_dtypes Column data types of the right table.
+ * @param[in] communicated_left Left table after all-to-all communication.
+ * @param[in] communicated_right Right table after all-to-all communication.
  * @param[out] batch_join_results Inner join result of each batch.
  * @param[in] left_on Column indices from the left table to join on. This argument will be passed
  *     directly *cudf::inner_join*.
@@ -280,12 +173,8 @@ all_to_all_comm_single_batch(
  */
 void
 inner_join_func(
-    vector<vector<vector<void *> > > const& left_buckets,
-    vector<vector<int64_t> > const& left_counts,
-    vector<cudf::data_type> const& left_dtypes,
-    vector<vector<vector<void *> > > const& right_buckets,
-    vector<vector<int64_t> > const& right_counts,
-    vector<cudf::data_type> const& right_dtypes,
+    vector<std::unique_ptr<table> > &communicated_left,
+    vector<std::unique_ptr<table> > &communicated_right,
     vector<std::unique_ptr<table> > &batch_join_results,
     vector<cudf::size_type> const& left_on,
     vector<cudf::size_type> const& right_on,
@@ -309,19 +198,11 @@ inner_join_func(
             start_time = high_resolution_clock::now();
         }
 
-        std::unique_ptr<table> local_left = all_to_all_merge_data(
-            left_buckets[ibatch], left_counts[ibatch], left_dtypes, communicator
-        );
-
-        std::unique_ptr<table> local_right = all_to_all_merge_data(
-            right_buckets[ibatch], right_counts[ibatch], right_dtypes, communicator
-        );
-
-        if (local_left->num_rows() && local_right->num_rows()) {
+        if (communicated_left[ibatch]->num_rows() && communicated_right[ibatch]->num_rows()) {
             // Perform local join only when both left and right tables are not empty.
             // If either is empty, the local join will return the other table, which is not desired.
             batch_join_results[ibatch] = cudf::inner_join(
-                local_left->view(), local_right->view(),
+                communicated_left[ibatch]->view(), communicated_right[ibatch]->view(),
                 left_on, right_on, columns_in_common
             );
         } else {
@@ -388,7 +269,8 @@ distributed_inner_join(
         // we can get away with using just one thread.
     }
 
-    int mpi_size = communicator->mpi_size;
+    int mpi_rank { communicator->mpi_rank };
+    int mpi_size { communicator->mpi_size };
     std::chrono::time_point<high_resolution_clock> start_time;
     std::chrono::time_point<high_resolution_clock> stop_time;
 
@@ -424,32 +306,58 @@ distributed_inner_join(
     if (report_timing) {
         stop_time = high_resolution_clock::now();
         auto duration = duration_cast<milliseconds>(stop_time - start_time);
-        std::cerr << "Rank " << communicator->mpi_rank << ": Hash partition takes "
-                  << duration.count() << "ms" << std::endl;
+        std::cerr << "Rank " << mpi_rank << ": Hash partition takes " << duration.count() << "ms"
+                  << std::endl;
     }
 
-    /* Get column data types */
+    /* Communicate the offsets of each batch */
 
-    cudf::size_type nleft_columns = hashed_left->num_columns();
-    cudf::size_type nright_columns = hashed_right->num_columns();
+    // `recv_offsets[i, j]` represents the number of items received from rank `j` in batch `i`
+    vector<vector<int64_t> > recv_offsets_left(over_decom_factor);
+    vector<vector<int64_t> > recv_offsets_right(over_decom_factor);
 
-    vector<cudf::data_type> left_dtypes(nleft_columns);
-    vector<cudf::data_type> right_dtypes(nright_columns);
+    for (int ibatch = 0; ibatch < over_decom_factor; ibatch++) {
+        size_t start_idx = ibatch * mpi_size;
+        size_t end_idx = (ibatch + 1) * mpi_size + 1;
 
-    for (int icol = 0; icol < nleft_columns; icol ++) {
-        left_dtypes[icol] = hashed_left->view().column(icol).type();
+        communicate_sizes(
+            vector<cudf::size_type>(&left_offset[start_idx], &left_offset[end_idx]),
+            recv_offsets_left[ibatch], communicator
+        );
+
+        communicate_sizes(
+            vector<cudf::size_type>(&right_offset[start_idx], &right_offset[end_idx]),
+            recv_offsets_right[ibatch], communicator
+        );
     }
 
-    for (int icol = 0; icol < nright_columns; icol ++) {
-        right_dtypes[icol] = hashed_right->view().column(icol).type();
+    /* Declare storage for the table after all-to-all communication */
+
+    // left table after all-to-all for each batch
+    vector<std::unique_ptr<table> > communicated_left(over_decom_factor);
+    // right table after all-to-all for each batch
+    vector<std::unique_ptr<table> > communicated_right(over_decom_factor);
+
+    for (int ibatch = 0; ibatch < over_decom_factor; ibatch++) {
+        vector<std::unique_ptr<column> > communicated_left_columns;
+        for (cudf::size_type icol = 0; icol < hashed_left->num_columns(); icol++) {
+            communicated_left_columns.push_back(cudf::make_numeric_column(
+                hashed_left->view().column(icol).type(),
+                recv_offsets_left[ibatch].back()));
+        }
+        communicated_left[ibatch] = std::make_unique<table>(std::move(communicated_left_columns));
+
+        vector<std::unique_ptr<column> > communicated_right_columns;
+        for (cudf::size_type icol = 0; icol < hashed_right->num_columns(); icol++) {
+            communicated_right_columns.push_back(cudf::make_numeric_column(
+                hashed_right->view().column(icol).type(),
+                recv_offsets_right[ibatch].back()));
+        }
+        communicated_right[ibatch] = std::make_unique<table>(std::move(communicated_right_columns));
     }
 
-    /* Declare storage for received buckets */
+    CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
 
-    vector<vector<vector<void *> > > left_buckets(over_decom_factor);  // [ibatch, icol, ibucket]
-    vector<vector<vector<void *> > > right_buckets(over_decom_factor);  // [ibatch, icol, ibucket]
-    vector<vector<int64_t> > left_counts(over_decom_factor);  // [ibatch, ibucket]
-    vector<vector<int64_t> > right_counts(over_decom_factor);  // [ibatch, ibucket]
     // *flags* indicates whether each batch has finished communication
     // *flags* uses std::atomic because unsynchronized access to an object which is modified in one
     // thread and read in another is undefined behavior.
@@ -460,12 +368,50 @@ distributed_inner_join(
         flag = false;
     }
 
+    /* Copy from hashed table to communicated table for the current rank */
+
+    // These device-to-device memory copies are performed explicitly here before all-to-all
+    // communication and local join, because if they are part of the communication, they could block
+    // the host thread (even if they are launched on different streams) while the local join kernel
+    // is running, limiting the efficacy of overlapping.
+
+    for (int ibatch = 0; ibatch < over_decom_factor; ibatch++) {
+        for (cudf::size_type icol = 0; icol < hashed_left->num_columns(); icol++) {
+            cudf::data_type dtype = hashed_left->view().column(icol).type();
+            cudf::size_type dtype_size = cudf::size_of(dtype);
+
+            CUDA_RT_CALL( cudaMemcpy(
+                (void *)((char *)(communicated_left[ibatch]->mutable_view().column(icol).head())
+                        + recv_offsets_left[ibatch][mpi_rank] * dtype_size),
+                (void *)((char *)(hashed_left->view().column(icol).head())
+                        + left_offset[ibatch * mpi_size + mpi_rank] * dtype_size),
+                (recv_offsets_left[ibatch][mpi_rank + 1] - recv_offsets_left[ibatch][mpi_rank])
+                * dtype_size,
+                cudaMemcpyDeviceToDevice)
+            );
+        }
+
+        for (cudf::size_type icol = 0; icol < hashed_right->num_columns(); icol++) {
+            cudf::data_type dtype = hashed_right->view().column(icol).type();
+            cudf::size_type dtype_size = cudf::size_of(dtype);
+
+            CUDA_RT_CALL( cudaMemcpy(
+                (void *)((char *)(communicated_right[ibatch]->mutable_view().column(icol).head())
+                        + recv_offsets_right[ibatch][mpi_rank] * dtype_size),
+                (void *)((char *)(hashed_right->view().column(icol).head())
+                        + right_offset[ibatch * mpi_size + mpi_rank] * dtype_size),
+                (recv_offsets_right[ibatch][mpi_rank + 1] - recv_offsets_right[ibatch][mpi_rank])
+                * dtype_size,
+                cudaMemcpyDeviceToDevice)
+            );
+        }
+    }
+
     /* Launch inner join thread */
 
     std::thread inner_join_thread(
         inner_join_func,
-        std::ref(left_buckets), std::ref(left_counts), std::ref(left_dtypes),
-        std::ref(right_buckets), std::ref(right_counts), std::ref(right_dtypes),
+        std::ref(communicated_left), std::ref(communicated_right),
         std::ref(batch_join_results), left_on, right_on, columns_in_common,
         std::ref(flags), communicator, report_timing, rmm::mr::get_current_device_resource()
     );
@@ -483,22 +429,25 @@ distributed_inner_join(
         size_t end_idx = (ibatch + 1) * mpi_size + 1;
 
         // all-to-all communication for the ibatch
+        if (communicator->group_by_batch())
+            communicator->start();
+
         all_to_all_comm(
-            hashed_left->view(),
+            hashed_left->view(), communicated_left[ibatch]->mutable_view(),
             vector<cudf::size_type>(&left_offset[start_idx], &left_offset[end_idx]),
-            left_buckets[ibatch], left_counts[ibatch], communicator
+            recv_offsets_left[ibatch],
+            communicator, false
         );
 
         all_to_all_comm(
-            hashed_right->view(),
+            hashed_right->view(), communicated_right[ibatch]->mutable_view(),
             vector<cudf::size_type>(&right_offset[start_idx], &right_offset[end_idx]),
-            right_buckets[ibatch], right_counts[ibatch], communicator
+            recv_offsets_right[ibatch],
+            communicator, false
         );
 
-        if (over_decom_factor == 1) {
-            hashed_left.reset();
-            hashed_right.reset();
-        }
+        if (communicator->group_by_batch())
+            communicator->stop();
 
         // mark the communication of ibatch as finished.
         // the join thread is safe to start performing local join on ibatch
@@ -507,19 +456,17 @@ distributed_inner_join(
         if (report_timing) {
             stop_time = high_resolution_clock::now();
             auto duration = duration_cast<milliseconds>(stop_time - start_time);
-            std::cerr << "Rank " << communicator->mpi_rank << ": All-to-all communication on batch "
+            std::cerr << "Rank " << mpi_rank << ": All-to-all communication on batch "
                       << ibatch << " takes " << duration.count() << "ms" << std::endl;
         }
     }
 
+    // hashed left and right tables should not be needed now
+    hashed_left.reset();
+    hashed_right.reset();
+
     // wait for all join batches to finish
     inner_join_thread.join();
-
-    // hashed left and right tables should not be needed now
-    if (over_decom_factor > 1) {
-        hashed_left.reset();
-        hashed_right.reset();
-    }
 
     /* Merge join results from different batches into a single table */
 

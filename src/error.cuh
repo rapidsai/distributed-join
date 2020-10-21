@@ -25,9 +25,11 @@
 #define CUDA_RT_CALL(call)                                                                         \
 {                                                                                                  \
     cudaError_t cudaStatus = call;                                                                 \
-    if (cudaSuccess != cudaStatus)                                                                 \
+    if (cudaSuccess != cudaStatus) {                                                               \
         fprintf(stderr, "ERROR: CUDA RT call \"%s\" in line %d of file %s failed with %s (%d).\n", \
                         #call, __LINE__, __FILE__, cudaGetErrorString(cudaStatus), cudaStatus);    \
+        exit(1);                                                                                   \
+    }                                                                                              \
 }
 #endif
 
@@ -36,9 +38,11 @@
 #define UCX_CALL(call)                                                                             \
 {                                                                                                  \
     ucs_status_t status = call;                                                                    \
-    if (UCS_OK != status)                                                                          \
+    if (UCS_OK != status) {                                                                        \
         fprintf(stderr, "\"%s\" in line %d of file %s failed with %s (%d).\n",                     \
                         #call, __LINE__, __FILE__, ucs_status_string(status), status);             \
+        exit(1);                                                                                   \
+    }                                                                                              \
 }
 #endif
 
@@ -53,6 +57,7 @@
         MPI_Error_string(status, estring, &len);                                                   \
         fprintf(stderr, "\"%s\" in line %d of file %s failed with %s (%d).\n",                     \
                 #call, __LINE__, __FILE__, estring, status);                                       \
+        exit(1);                                                                                   \
     }                                                                                              \
 }
 #endif
@@ -65,6 +70,7 @@
     if (ncclSuccess != status) {                                                                   \
         fprintf(stderr, "ERROR: nccl call \"%s\" in line %d of file %s failed with %s.\n",         \
                         #call, __LINE__, __FILE__, ncclGetErrorString(status));                    \
+        exit(1);                                                                                   \
     }                                                                                              \
 }
 #endif
