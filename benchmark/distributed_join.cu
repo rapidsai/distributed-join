@@ -51,6 +51,7 @@ static bool IS_BUILD_TABLE_KEY_UNIQUE = true;
 static int OVER_DECOMPOSITION_FACTOR = 1;
 static std::string COMMUNICATOR_NAME = "UCX";
 static bool USE_BUFFER_COMMUNICATOR = false;
+static int64_t COMMUNICATOR_BUFFER_SIZE = 1'600'000'000LL;
 
 
 void parse_command_line_arguments(int argc, char *argv[])
@@ -166,8 +167,10 @@ int main(int argc, char *argv[])
         pool_mr = new rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource>(
             rmm::mr::get_current_device_resource(), pool_size, pool_size);
         rmm::mr::set_current_device_resource(pool_mr);
+        // *2 because buffers are needed for both sends and receives
+        const int num_comm_buffers = 2 * mpi_size;
         communicator = initialize_ucx_communicator(
-            USE_BUFFER_COMMUNICATOR, 2 * mpi_size * 4, 200'000'000LL / mpi_size - 100'000LL
+            true, num_comm_buffers, COMMUNICATOR_BUFFER_SIZE / num_comm_buffers - 100'000LL
         );
     } else if (COMMUNICATOR_NAME == "UCX" && !USE_BUFFER_COMMUNICATOR) {
         // For UCX with preregistered memory pool, a communicator is first constructed so that

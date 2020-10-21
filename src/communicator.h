@@ -53,12 +53,6 @@ virtual void start() = 0;
 virtual void stop() = 0;
 
 /**
- * If the communicator uses tag internally, this method provides a way for the user to get a new tag
- * to avoid conflicts.
- */
-virtual void use_new_tag() {};
-
-/**
  * Send data to a remote rank.
  *
  * @param[in] buf           Data buffer to send to remote rank
@@ -83,6 +77,12 @@ virtual void recv(void *buf, int64_t count, int element_size, int source) = 0;
  */
 virtual void finalize() = 0;
 
+/**
+ * Whether the distributed join implementation using this communicator should group by batch or
+ * group by column.
+ */
+virtual bool group_by_batch() = 0;
+
 int mpi_rank;
 int mpi_size;
 int current_device;
@@ -96,8 +96,7 @@ class MPILikeCommunicator : public Communicator
 // *MPILikeCommunicator* is an abstract class which implements the behavior of start/stop pairs
 // for communication libraries like MPI or UCX.
 
-// Note: For all tag send/recv operations, tags above 1024 are reserved for group send/recv, and
-// should not be used as a user tag.
+// Note: For all tag send/recv operations, -1 is reserved and should not be used as a user tag.
 // TODO: Enforce this assumption by runtime checking.
 
 public:
@@ -107,8 +106,6 @@ virtual void initialize();
 virtual void start();
 
 virtual void stop();
-
-virtual void use_new_tag();
 
 virtual void send(const void *buf, int64_t count, int element_size, int dest);
 
@@ -178,7 +175,7 @@ virtual void waitall(std::vector<comm_handle_t>::const_iterator begin, std::vect
 // used for keeping track of the pending requests since the last *start* call
 std::vector<comm_handle_t> pending_requests;
 // tag to use for group calls
-int reserved_tag;
+static constexpr int reserved_tag {-1};
 
 };
 
@@ -212,6 +209,7 @@ virtual void wait(comm_handle_t request);
 virtual void waitall(std::vector<comm_handle_t> requests);
 virtual void waitall(std::vector<comm_handle_t>::const_iterator begin, std::vector<comm_handle_t>::const_iterator end);
 virtual void finalize();
+virtual bool group_by_batch() { return true; }
 
 ucp_context_h         ucp_context;
 ucp_worker_h          ucp_worker;
@@ -258,6 +256,10 @@ virtual void wait(comm_handle_t request);
 virtual void waitall(std::vector<comm_handle_t> requests);
 virtual void waitall(std::vector<comm_handle_t>::const_iterator begin, std::vector<comm_handle_t>::const_iterator end);
 virtual void finalize();
+// It is possible to use different tags to distinguish between different messages destined to the
+// same remote GPU, but grouping by batch means more communication buffers are needed, which makes
+// each communication buffer smaller, resulting in a performance degradation.
+virtual bool group_by_batch() { return false; }
 
 enum CommInfoTypes { SEND, RECV };
 
@@ -358,6 +360,10 @@ virtual void send(const void *buf, int64_t count, int element_size, int dest);
 virtual void recv(void *buf, int64_t count, int element_size, int source);
 
 virtual void finalize();
+
+// NCCL does not support sending multiple messages to the same remote GPUs within `start` and `stop`
+// as of V2.7. This feature is planned for V2.8.
+virtual bool group_by_batch() { return false; }
 
 // Stream created/destroyed by the communicator object that is used for communication-related
 // kernels/copies

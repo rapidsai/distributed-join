@@ -39,7 +39,6 @@ void Communicator::initialize()
 void MPILikeCommunicator::initialize()
 {
     Communicator::initialize();
-    reserved_tag = 1025;
 }
 
 
@@ -52,11 +51,6 @@ void MPILikeCommunicator::start()
 void MPILikeCommunicator::stop()
 {
     waitall(pending_requests);
-}
-
-void MPILikeCommunicator::use_new_tag()
-{
-    reserved_tag++;
 }
 
 
@@ -894,16 +888,13 @@ void NCCLCommunicator::send(const void *buf, int64_t count, int element_size, in
     std::size_t aligned_size = (count * element_size + 255) / 256 * 256;
 
     comm_buffers.push_back(
-        rmm::mr::get_current_device_resource()->allocate(aligned_size, cudaStreamDefault));
-    CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
+        rmm::mr::get_current_device_resource()->allocate(aligned_size, comm_stream));
     comm_buffer_sizes.push_back(count * element_size);
 
-    CUDA_RT_CALL(
-        cudaMemcpy(comm_buffers.back(), buf, count * element_size, cudaMemcpyDeviceToDevice
+    CUDA_RT_CALL(cudaMemcpyAsync(
+        comm_buffers.back(), buf, count * element_size, cudaMemcpyDeviceToDevice, comm_stream
     ));
-    NCCL_CALL(
-        ncclSend(comm_buffers.back(), aligned_size, ncclChar, dest, nccl_comm, comm_stream)
-    );
+    NCCL_CALL(ncclSend(comm_buffers.back(), aligned_size, ncclChar, dest, nccl_comm, comm_stream));
 }
 
 
@@ -914,8 +905,7 @@ void NCCLCommunicator::recv(void *buf, int64_t count, int element_size, int sour
     recv_buffers.push_back(buf);
     recv_buffer_idx.push_back(comm_buffers.size());
     comm_buffers.push_back(
-        rmm::mr::get_current_device_resource()->allocate(aligned_size, cudaStreamDefault));
-    CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
+        rmm::mr::get_current_device_resource()->allocate(aligned_size, comm_stream));
     comm_buffer_sizes.push_back(count * element_size);
 
     NCCL_CALL(
@@ -927,22 +917,22 @@ void NCCLCommunicator::recv(void *buf, int64_t count, int element_size, int sour
 void NCCLCommunicator::stop()
 {
     NCCL_CALL( ncclGroupEnd() );
-    CUDA_RT_CALL( cudaStreamSynchronize(comm_stream) );
 
     for (std::size_t ibuffer = 0; ibuffer < recv_buffers.size(); ibuffer++) {
         std::size_t idx = recv_buffer_idx[ibuffer];
-        CUDA_RT_CALL(cudaMemcpy(
-            recv_buffers[ibuffer], comm_buffers[idx], comm_buffer_sizes[idx], cudaMemcpyDeviceToDevice
+        CUDA_RT_CALL(cudaMemcpyAsync(
+            recv_buffers[ibuffer], comm_buffers[idx], comm_buffer_sizes[idx],
+            cudaMemcpyDeviceToDevice, comm_stream
         ));
     }
 
     for (std::size_t ibuffer = 0; ibuffer < comm_buffers.size(); ibuffer++) {
         std::size_t aligned_size = (comm_buffer_sizes[ibuffer] + 255) / 256 * 256;
         rmm::mr::get_current_device_resource()->deallocate(
-            comm_buffers[ibuffer], aligned_size, cudaStreamDefault);
+            comm_buffers[ibuffer], aligned_size, comm_stream);
     }
 
-    CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
+    CUDA_RT_CALL( cudaStreamSynchronize(comm_stream) );
 }
 
 
