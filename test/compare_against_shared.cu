@@ -33,6 +33,7 @@
 #include "../src/generate_table.cuh"
 #include "../src/distribute_table.cuh"
 #include "../src/distributed_join.cuh"
+#include "../src/registered_memory_resource.hpp"
 
 using cudf::table;
 
@@ -95,16 +96,6 @@ int main(int argc, char *argv[])
 
     parse_command_line_arguments(argc, argv);
 
-    /* Initialize memory pool */
-
-    size_t free_memory, total_memory;
-    CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
-    const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
-
-    rmm::mr::device_memory_resource* mr = rmm::mr::get_current_device_resource();
-    rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource> pool_mr {mr, pool_size, pool_size};
-    rmm::mr::set_current_device_resource(&pool_mr);
-
     /* Initialize communicator */
 
     int mpi_rank;
@@ -112,9 +103,18 @@ int main(int argc, char *argv[])
     MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
     MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
 
-    UCXCommunicator* communicator = initialize_ucx_communicator(
-        true, 2 * 3 * 2 * 2 * mpi_size, 1'000'000LL
-    );
+    UCXCommunicator* communicator = initialize_ucx_communicator(false, 0, 0);
+
+    /* Initialize memory pool */
+
+    size_t free_memory, total_memory;
+    CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
+    const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
+
+    registered_memory_resource mr(communicator);
+    auto *pool_mr = new rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource>(
+        &mr, pool_size, pool_size);
+    rmm::mr::set_current_device_resource(pool_mr);
 
     /* Generate build table and probe table and compute reference solution */
 
@@ -202,10 +202,22 @@ int main(int argc, char *argv[])
                 nrows
             );
         }
+
+        CUDA_RT_CALL( cudaDeviceSynchronize() );
     }
 
     /* Cleanup */
 
+    build.reset();
+    probe.reset();
+    reference.reset();
+    local_build.reset();
+    local_probe.reset();
+    join_result_all_ranks.reset();
+    join_result.reset();
+    CUDA_RT_CALL( cudaDeviceSynchronize() );
+
+    delete pool_mr;
     communicator->finalize();
     delete communicator;
 
