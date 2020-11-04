@@ -394,41 +394,14 @@ void UCXBufferCommunicator::setup_cache(int64_t ncaches, int64_t buffer_size)
     );
     CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
 
+    register_buffer(cache_start_addr, comm_buffer_size * ncaches, &cache_mem_handle);
+
     for (int icache = 0; icache < ncaches; icache ++) {
         void *current_buffer = (void *)((char *)cache_start_addr + icache * buffer_size);
         buffer_cache.push(current_buffer);
     }
 }
 
-
-void UCXBufferCommunicator::warmup_cache()
-{
-    if (mpi_size == 1)
-        return;
-
-    int ncaches = buffer_cache.size();
-    int partner = mpi_size - mpi_rank - 1;
-
-    if (partner == mpi_rank)
-        partner = 0;
-
-    comm_handle_t request;
-
-    /* Register the communication buffer by sending it to a remote rank.*/
-
-    if (mpi_rank < mpi_size / 2) {
-        request = UCXCommunicator::send(cache_start_addr, ncaches * comm_buffer_size, 1, partner, 10);
-    } else {
-        request = UCXCommunicator::recv(cache_start_addr, ncaches * comm_buffer_size, 1, partner, 10);
-    }
-
-    UCXCommunicator::wait(request);
-
-    if (mpi_rank == 0 && mpi_size % 2) {
-        request = UCXCommunicator::send(cache_start_addr, ncaches * comm_buffer_size, 1, mpi_size / 2, 10);
-        UCXCommunicator::wait(request);
-    }
-}
 
 /**
  * Get the communication tag passed to UCX from user defined tag and source rank.
@@ -828,6 +801,7 @@ void UCXBufferCommunicator::waitall(std::vector<comm_handle_t>::const_iterator b
 
 void UCXBufferCommunicator::finalize()
 {
+    deregister_buffer(cache_mem_handle);
     rmm::mr::get_current_device_resource()->deallocate(
         cache_start_addr, comm_buffer_size * buffer_cache.size(), cudaStreamDefault
     );
@@ -843,10 +817,7 @@ UCXCommunicator* initialize_ucx_communicator(bool use_buffer_communicator,
     if (use_buffer_communicator) {
         UCXBufferCommunicator *communicator = new UCXBufferCommunicator();
         communicator->initialize();
-
         communicator->setup_cache(num_comm_buffers, comm_buffer_size);
-        communicator->warmup_cache();
-
         return communicator;
     } else {
         UCXCommunicator *communicator = new UCXCommunicator();
