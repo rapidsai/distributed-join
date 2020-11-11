@@ -1,7 +1,7 @@
 CC=${CUDA_HOME}/bin/nvcc
 
 CUDF_CFLAGS=-I${CUDF_HOME}/include -I${CUDF_HOME}/include/libcudf/libcudacxx
-CUDF_LIBS=-L${CUDF_HOME}/lib -Xcompiler \"-Wl,-rpath-link,${CUDF_HOME}/lib\" -lcudf
+CUDF_LIBS=-L${CUDF_HOME}/lib -Xcompiler \"-Wl,-rpath-link,${CUDF_HOME}/lib\" -lcudf -lcudf_base -lcudf_join -lcudf_hash -lcudf_partitioning
 MPI_CFLAGS=-I${MPI_HOME}/include
 MPI_LIBS=-L${MPI_HOME}/lib -lmpi
 UCX_CFLAGS=-I${UCX_HOME}/include
