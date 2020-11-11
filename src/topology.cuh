@@ -14,26 +14,25 @@
  * limitations under the License.
  */
 
-#include <iostream>
 #include <mpi.h>
+#include <iostream>
 
 #include "error.cuh"
 
-
 void setup_topology(int argc, char *argv[])
 {
-    int device_count;
-    int mpi_rank;
+  int device_count;
+  int mpi_rank;
 
-    MPI_CALL( MPI_Init(&argc, &argv) );
-    MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
+  MPI_CALL(MPI_Init(&argc, &argv));
+  MPI_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank));
 
-    CUDA_RT_CALL( cudaGetDeviceCount(&device_count) );
-    std::cout << "Device count: " << device_count << std::endl;
+  CUDA_RT_CALL(cudaGetDeviceCount(&device_count));
+  std::cout << "Device count: " << device_count << std::endl;
 
-    int current_device = mpi_rank % device_count;
+  int current_device = mpi_rank % device_count;
 
-    CUDA_RT_CALL( cudaSetDevice(current_device) );
-    std::cout << "Rank " << mpi_rank << " select " << current_device << "/" << device_count << " GPU"
-              << std::endl;
+  CUDA_RT_CALL(cudaSetDevice(current_device));
+  std::cout << "Rank " << mpi_rank << " select " << current_device << "/" << device_count << " GPU"
+            << std::endl;
 }

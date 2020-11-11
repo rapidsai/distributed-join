@@ -16,258 +16,242 @@
 
 #pragma once
 
-#include <vector>
-#include <queue>
-#include <ucp/api/ucp.h>
 #include <mpi.h>
-#include <cstdint>
 #include <nccl.h>
+#include <ucp/api/ucp.h>
+#include <cstdint>
+#include <queue>
+#include <vector>
 
+#define comm_handle_t void *
 
-#define comm_handle_t void*
+class Communicator {
+  // Note: There is no guarantee that communicators will be thread-safe.
 
+ public:
+  /**
+   * Initialize the communicator. This method should be called by all ranks in MPI_COMM_WORLD. Also,
+   * each rank should call this method at most once. In other word, multiple communicators are not
+   * supported.
+   */
+  virtual void initialize() = 0;
 
-class Communicator
-{
+  /**
+   * Define the start point of a collective communication.
+   *
+   * Note: nested start/stop pairs are not supported and will lead to undefined behavior.
+   */
+  virtual void start() = 0;
 
-// Note: There is no guarantee that communicators will be thread-safe.
+  /**
+   * Blocked until all communication since the *start* has been completed.
+   */
+  virtual void stop() = 0;
 
-public:
+  /**
+   * Send data to a remote rank.
+   *
+   * @param[in] buf           Data buffer to send to remote rank
+   * @param[in] count         Number of elements to send
+   * @param[in] element_size  Size of each element
+   * @param[in] dest          Destination rank
+   */
+  virtual void send(const void *buf, int64_t count, int element_size, int dest) = 0;
 
-/**
- * Initialize the communicator. This method should be called by all ranks in MPI_COMM_WORLD. Also, each rank should
- * call this method at most once. In other word, multiple communicators are not supported.
- */
-virtual void initialize() = 0;
+  /**
+   * Receive data from a remote rank.
+   *
+   * @param[in] buf           Receive buffer to place received data into
+   * @param[in] count         Number of elements to receive
+   * @param[in] element_size  Size of each element
+   * @param[in] source        Source rank
+   */
+  virtual void recv(void *buf, int64_t count, int element_size, int source) = 0;
 
-/**
- * Define the start point of a collective communication.
- *
- * Note: nested start/stop pairs are not supported and will lead to undefined behavior.
- */
-virtual void start() = 0;
+  /**
+   * Close the endpoints, free up used communication resources, and stop the communication runtime.
+   */
+  virtual void finalize() = 0;
 
-/**
- * Blocked until all communication since the *start* has been completed.
- */
-virtual void stop() = 0;
+  /**
+   * Whether the distributed join implementation using this communicator should group by batch or
+   * group by column.
+   */
+  virtual bool group_by_batch() = 0;
 
-/**
- * Send data to a remote rank.
- *
- * @param[in] buf           Data buffer to send to remote rank
- * @param[in] count         Number of elements to send
- * @param[in] element_size  Size of each element
- * @param[in] dest          Destination rank
- */
-virtual void send(const void *buf, int64_t count, int element_size, int dest) = 0;
-
-/**
- * Receive data from a remote rank.
- *
- * @param[in] buf           Receive buffer to place received data into
- * @param[in] count         Number of elements to receive
- * @param[in] element_size  Size of each element
- * @param[in] source        Source rank
- */
-virtual void recv(void *buf, int64_t count, int element_size, int source) = 0;
-
-/**
- * Close the endpoints, free up used communication resources, and stop the communication runtime.
- */
-virtual void finalize() = 0;
-
-/**
- * Whether the distributed join implementation using this communicator should group by batch or
- * group by column.
- */
-virtual bool group_by_batch() = 0;
-
-int mpi_rank;
-int mpi_size;
-int current_device;
-
+  int mpi_rank;
+  int mpi_size;
+  int current_device;
 };
 
+class MPILikeCommunicator : public Communicator {
+  // *MPILikeCommunicator* is an abstract class which implements the behavior of start/stop pairs
+  // for communication libraries like MPI or UCX.
 
-class MPILikeCommunicator : public Communicator
-{
+  // Note: For all tag send/recv operations, -1 is reserved and should not be used as a user tag.
+  // TODO: Enforce this assumption by runtime checking.
 
-// *MPILikeCommunicator* is an abstract class which implements the behavior of start/stop pairs
-// for communication libraries like MPI or UCX.
+ public:
+  virtual void initialize();
 
-// Note: For all tag send/recv operations, -1 is reserved and should not be used as a user tag.
-// TODO: Enforce this assumption by runtime checking.
+  virtual void start();
 
-public:
+  virtual void stop();
 
-virtual void initialize();
+  virtual void send(const void *buf, int64_t count, int element_size, int dest);
 
-virtual void start();
+  /**
+   * Send data to a remote rank asynchronously.
+   *
+   * @param[in] buf           Data buffer to send to remote rank
+   * @param[in] count         Number of elements to send
+   * @param[in] element_size  Size of each element
+   * @param[in] dest          Destination rank
+   * @param[in] tag           Message tag
+   *
+   * @returns                 Communication handle for waiting. See 'wait' and 'waitall'.
+   */
+  virtual comm_handle_t send(
+    const void *buf, int64_t count, int element_size, int dest, int tag) = 0;
 
-virtual void stop();
+  virtual void recv(void *buf, int64_t count, int element_size, int source);
 
-virtual void send(const void *buf, int64_t count, int element_size, int dest);
+  /**
+   * Receive data from a remote rank asynchronously. Use this version if the receive size is known.
+   *
+   * @param[in] buf           Receive buffer to place received data into
+   * @param[in] count         Number of elements to receive
+   * @param[in] element_size  Size of each element
+   * @param[in] source        Source rank
+   * @param[in] tag           Message tag
+   *
+   * @returns                 Communication handle for waiting. See 'wait' and 'waitall'.
+   */
+  virtual comm_handle_t recv(void *buf, int64_t count, int element_size, int source, int tag) = 0;
 
-/**
- * Send data to a remote rank asynchronously.
- *
- * @param[in] buf           Data buffer to send to remote rank
- * @param[in] count         Number of elements to send
- * @param[in] element_size  Size of each element
- * @param[in] dest          Destination rank
- * @param[in] tag           Message tag
- *
- * @returns                 Communication handle for waiting. See 'wait' and 'waitall'.
- */
-virtual comm_handle_t send(const void *buf, int64_t count, int element_size, int dest, int tag) = 0;
+  /**
+   * Receive data from a remote rank asynchronously. Use this version if the receive size is
+   * unknown.
+   *
+   * @param[out] buf          Allocated receive buffer. It is the caller's responsibility to free
+   * this buffer.
+   * @param[out] count        Number of elements received
+   * @param[in] element_size  The size of each element
+   * @param[in] source        Source rank
+   * @param[in] tag           Message tag
+   *
+   * @returns                 Communication handle for waiting. See 'wait' and 'waitall'.
+   */
+  virtual comm_handle_t recv(void **buf, int64_t *count, int element_size, int source, int tag) = 0;
 
-virtual void recv(void *buf, int64_t count, int element_size, int source);
+  /**
+   * The host process will block until a single communication is completed.
+   *
+   * @param[in] request       Communication handle to wait for
+   */
+  virtual void wait(comm_handle_t request) = 0;
 
-/**
- * Receive data from a remote rank asynchronously. Use this version if the receive size is known.
- *
- * @param[in] buf           Receive buffer to place received data into
- * @param[in] count         Number of elements to receive
- * @param[in] element_size  Size of each element
- * @param[in] source        Source rank
- * @param[in] tag           Message tag
- *
- * @returns                 Communication handle for waiting. See 'wait' and 'waitall'.
- */
-virtual comm_handle_t recv(void *buf, int64_t count, int element_size, int source, int tag) = 0;
+  /**
+   * The host process will block until all communications specified are completed.
+   *
+   * @param[in] requests      A vector of communication handles to wait for
+   */
+  virtual void waitall(std::vector<comm_handle_t> requests) = 0;
 
-/**
- * Receive data from a remote rank asynchronously. Use this version if the receive size is unknown.
- *
- * @param[out] buf          Allocated receive buffer. It is the caller's responsibility to free this buffer.
- * @param[out] count        Number of elements received
- * @param[in] element_size  The size of each element
- * @param[in] source        Source rank
- * @param[in] tag           Message tag
- *
- * @returns                 Communication handle for waiting. See 'wait' and 'waitall'.
- */
-virtual comm_handle_t recv(void **buf, int64_t *count, int element_size, int source, int tag) = 0;
+  /**
+   * The host process will block until all communications specified are completed.
+   *
+   * @param[in] begin         Iterator points to the first handle to wait for
+   * @param[in] end           Iterator points to the next handle after the last
+   */
+  virtual void waitall(std::vector<comm_handle_t>::const_iterator begin,
+                       std::vector<comm_handle_t>::const_iterator end) = 0;
 
-/**
- * The host process will block until a single communication is completed.
- *
- * @param[in] request       Communication handle to wait for
- */
-virtual void wait(comm_handle_t request) = 0;
-
-/**
- * The host process will block until all communications specified are completed.
- *
- * @param[in] requests      A vector of communication handles to wait for
- */
-virtual void waitall(std::vector<comm_handle_t> requests) = 0;
-
-/**
- * The host process will block until all communications specified are completed.
- *
- * @param[in] begin         Iterator points to the first handle to wait for
- * @param[in] end           Iterator points to the next handle after the last
- */
-virtual void waitall(std::vector<comm_handle_t>::const_iterator begin, std::vector<comm_handle_t>::const_iterator end) = 0;
-
-// used for keeping track of the pending requests since the last *start* call
-std::vector<comm_handle_t> pending_requests;
-// tag to use for group calls
-static constexpr int reserved_tag {-1};
-
+  // used for keeping track of the pending requests since the last *start* call
+  std::vector<comm_handle_t> pending_requests;
+  // tag to use for group calls
+  static constexpr int reserved_tag{-1};
 };
 
+class UCXCommunicator : public MPILikeCommunicator {
+ public:
+  virtual void initialize();
+  using MPILikeCommunicator::send;
+  virtual comm_handle_t send(const void *buf, int64_t count, int element_size, int dest, int tag);
+  using MPILikeCommunicator::recv;
+  virtual comm_handle_t recv(void *buf, int64_t count, int element_size, int source, int tag);
+  virtual comm_handle_t recv(void **buf, int64_t *count, int element_size, int source, int tag);
+  /**
+   * Register a buffer through UCX.
+   *
+   * @param[in] buf               Buffer to be registered.
+   * @param[in] size              Size in byte to register.
+   * @param[out] memory_handle    Memory handle to the registered buffer.
+   */
+  virtual void register_buffer(void *buf, size_t size, ucp_mem_h *memory_handle);
+  /**
+   * Deregister a buffer through UCX.
+   *
+   * @param[in] memory_handle     Memory handle of which the associated buffer will be deregistered.
+   */
+  virtual void deregister_buffer(ucp_mem_h memory_handle);
+  virtual void wait(comm_handle_t request);
+  virtual void waitall(std::vector<comm_handle_t> requests);
+  virtual void waitall(std::vector<comm_handle_t>::const_iterator begin,
+                       std::vector<comm_handle_t>::const_iterator end);
+  virtual void finalize();
+  virtual bool group_by_batch() { return true; }
 
-class UCXCommunicator: public MPILikeCommunicator
-{
+  ucp_context_h ucp_context;
+  ucp_worker_h ucp_worker;
+  ucp_address_t *ucp_worker_address;
+  size_t ucp_worker_address_len;
+  std::vector<ucp_ep_h> ucp_endpoints;
 
-public:
-
-virtual void initialize();
-using MPILikeCommunicator::send;
-virtual comm_handle_t send(const void *buf, int64_t count, int element_size, int dest, int tag);
-using MPILikeCommunicator::recv;
-virtual comm_handle_t recv(void *buf, int64_t count, int element_size, int source, int tag);
-virtual comm_handle_t recv(void **buf, int64_t *count, int element_size, int source, int tag);
-/**
- * Register a buffer through UCX.
- *
- * @param[in] buf               Buffer to be registered.
- * @param[in] size              Size in byte to register.
- * @param[out] memory_handle    Memory handle to the registered buffer.
- */
-virtual void register_buffer(void *buf, size_t size, ucp_mem_h* memory_handle);
-/**
- * Deregister a buffer through UCX.
- *
- * @param[in] memory_handle     Memory handle of which the associated buffer will be deregistered.
- */
-virtual void deregister_buffer(ucp_mem_h memory_handle);
-virtual void wait(comm_handle_t request);
-virtual void waitall(std::vector<comm_handle_t> requests);
-virtual void waitall(std::vector<comm_handle_t>::const_iterator begin, std::vector<comm_handle_t>::const_iterator end);
-virtual void finalize();
-virtual bool group_by_batch() { return true; }
-
-ucp_context_h         ucp_context;
-ucp_worker_h          ucp_worker;
-ucp_address_t         *ucp_worker_address;
-size_t                ucp_worker_address_len;
-std::vector<ucp_ep_h> ucp_endpoints;
-
-private:
-
-virtual void initialize_ucx();
-virtual void create_endpoints();
-
+ private:
+  virtual void initialize_ucx();
+  virtual void create_endpoints();
 };
 
+class UCXBufferCommunicator : public UCXCommunicator {
+ public:
+  virtual void initialize();
 
-class UCXBufferCommunicator: public UCXCommunicator
-{
+  /**
+   * Allocate communication buffers and put them into the 'buffer_cache' queue.
+   *
+   * @param[in] ncaches       Total number of communication buffers.
+   * @param[in] cache_size    Size of each communication buffer.
+   */
+  virtual void setup_cache(int64_t ncaches, int64_t cache_size);
 
-public:
+  using UCXCommunicator::send;
+  virtual comm_handle_t send(const void *buf, int64_t count, int element_size, int dest, int tag);
+  using UCXCommunicator::recv;
+  virtual comm_handle_t recv(void *buf, int64_t count, int element_size, int source, int tag);
+  virtual comm_handle_t recv(void **buf, int64_t *count, int element_size, int source, int tag);
+  virtual void wait(comm_handle_t request);
+  virtual void waitall(std::vector<comm_handle_t> requests);
+  virtual void waitall(std::vector<comm_handle_t>::const_iterator begin,
+                       std::vector<comm_handle_t>::const_iterator end);
+  virtual void finalize();
+  // It is possible to use different tags to distinguish between different messages destined to the
+  // same remote GPU, but grouping by batch means more communication buffers are needed, which makes
+  // each communication buffer smaller, resulting in a performance degradation.
+  virtual bool group_by_batch() { return false; }
 
-virtual void initialize();
+  enum CommInfoTypes { SEND, RECV };
 
-/**
- * Allocate communication buffers and put them into the 'buffer_cache' queue.
- *
- * @param[in] ncaches       Total number of communication buffers.
- * @param[in] cache_size    Size of each communication buffer.
- */
-virtual void setup_cache(int64_t ncaches, int64_t cache_size);
-
-using UCXCommunicator::send;
-virtual comm_handle_t send(const void *buf, int64_t count, int element_size, int dest, int tag);
-using UCXCommunicator::recv;
-virtual comm_handle_t recv(void *buf, int64_t count, int element_size, int source, int tag);
-virtual comm_handle_t recv(void **buf, int64_t *count, int element_size, int source, int tag);
-virtual void wait(comm_handle_t request);
-virtual void waitall(std::vector<comm_handle_t> requests);
-virtual void waitall(std::vector<comm_handle_t>::const_iterator begin, std::vector<comm_handle_t>::const_iterator end);
-virtual void finalize();
-// It is possible to use different tags to distinguish between different messages destined to the
-// same remote GPU, but grouping by batch means more communication buffers are needed, which makes
-// each communication buffer smaller, resulting in a performance degradation.
-virtual bool group_by_batch() { return false; }
-
-enum CommInfoTypes { SEND, RECV };
-
-struct CommInfo
-{
+  struct CommInfo {
     CommInfoTypes types;
     bool completed;  // used only for the handle returned to the user to signal completion
     UCXBufferCommunicator *comm;  // pointer to the Communicator object
-    CommInfo *orig_info;  // pointer to the handle returned to the user
-    void *comm_buffer;  // communication buffer
+    CommInfo *orig_info;          // pointer to the handle returned to the user
+    void *comm_buffer;            // communication buffer
     bool custom_allocated;  // indicate whether this object is allocated by UCX or communicator
-};
+  };
 
-struct SendInfo
-{
+  struct SendInfo {
     CommInfoTypes types;
     bool completed;
     UCXBufferCommunicator *comm;
@@ -275,46 +259,41 @@ struct SendInfo
     void *comm_buffer;
     bool custom_allocated;
     const void *send_buffer;  // user buffer
-    int64_t *count;  // pointer to the total number of elements need to be sent
-    int element_size;  // the size of each element
-    int dest;  // destination rank
-    int user_tag;  // tag specified by the user
-    int ibatch;  // current batch number
-};
+    int64_t *count;           // pointer to the total number of elements need to be sent
+    int element_size;         // the size of each element
+    int dest;                 // destination rank
+    int user_tag;             // tag specified by the user
+    int ibatch;               // current batch number
+  };
 
-struct RecvInfo
-{
+  struct RecvInfo {
     CommInfoTypes types;
     bool completed;
     UCXBufferCommunicator *comm;
     CommInfo *orig_info;
     void *comm_buffer;
     bool custom_allocated;
-    void **recv_buffer; // pointer to the receive buffer
-    int64_t *count;  // pointer to the total number of elements need to be received
-    int element_size;  // the size of each element
-    int source;  // source rank
-    int user_tag;  // tag specified by the user
-    int ibatch;  // current batch number
+    void **recv_buffer;  // pointer to the receive buffer
+    int64_t *count;      // pointer to the total number of elements need to be received
+    int element_size;    // the size of each element
+    int source;          // source rank
+    int user_tag;        // tag specified by the user
+    int ibatch;          // current batch number
+  };
+
+  int64_t comm_buffer_size;
+  std::queue<void *> buffer_cache;
+  cudaStream_t copy_stream;  // stream used for copying between user buffer and communication buffer
+
+ private:
+  virtual void initialize_ucx();
+  bool wait_send(SendInfo *info);
+  bool wait_recv(RecvInfo *info);
+  comm_handle_t recv_helper(void **buf, int64_t *count, int element_size, int source, int tag);
+
+  void *cache_start_addr;
+  ucp_mem_h cache_mem_handle;
 };
-
-
-int64_t comm_buffer_size;
-std::queue<void *> buffer_cache;
-cudaStream_t copy_stream;  // stream used for copying between user buffer and communication buffer
-
-private:
-
-virtual void initialize_ucx();
-bool wait_send(SendInfo *info);
-bool wait_recv(RecvInfo *info);
-comm_handle_t recv_helper(void **buf, int64_t *count, int element_size, int source, int tag);
-
-void *cache_start_addr;
-ucp_mem_h cache_mem_handle;
-
-};
-
 
 /**
  * Helper function for constructing a *UCXCommunicator*. This function needed to be called after
@@ -333,40 +312,35 @@ ucp_mem_h cache_mem_handle;
  * @returns                             Constructed communicator. It is the caller's responsibility
  *                                      to free this communicator using *delete*.
  */
-UCXCommunicator* initialize_ucx_communicator(bool use_buffer_communicator,
+UCXCommunicator *initialize_ucx_communicator(bool use_buffer_communicator,
                                              int num_comm_buffers,
                                              int64_t comm_buffer_size);
 
+class NCCLCommunicator : public Communicator {
+ public:
+  virtual void initialize();
 
-class NCCLCommunicator : public Communicator
-{
+  virtual void start();
 
-public:
+  virtual void stop();
 
-virtual void initialize();
+  virtual void send(const void *buf, int64_t count, int element_size, int dest);
 
-virtual void start();
+  virtual void recv(void *buf, int64_t count, int element_size, int source);
 
-virtual void stop();
+  virtual void finalize();
 
-virtual void send(const void *buf, int64_t count, int element_size, int dest);
+  // NCCL does not support sending multiple messages to the same remote GPUs within `start` and
+  // `stop` as of V2.7. This feature is planned for V2.8.
+  virtual bool group_by_batch() { return false; }
 
-virtual void recv(void *buf, int64_t count, int element_size, int source);
-
-virtual void finalize();
-
-// NCCL does not support sending multiple messages to the same remote GPUs within `start` and `stop`
-// as of V2.7. This feature is planned for V2.8.
-virtual bool group_by_batch() { return false; }
-
-// Stream created/destroyed by the communicator object that is used for communication-related
-// kernels/copies
-cudaStream_t comm_stream;
-ncclComm_t nccl_comm;
-std::vector<void *> comm_buffers;  // used for 128-bit alignment
-// used for keeping track of size allocated in comm_buffers
-std::vector<std::size_t> comm_buffer_sizes;
-std::vector<void *> recv_buffers;
-std::vector<std::size_t> recv_buffer_idx;
-
+  // Stream created/destroyed by the communicator object that is used for communication-related
+  // kernels/copies
+  cudaStream_t comm_stream;
+  ncclComm_t nccl_comm;
+  std::vector<void *> comm_buffers;  // used for 128-bit alignment
+  // used for keeping track of size allocated in comm_buffers
+  std::vector<std::size_t> comm_buffer_sizes;
+  std::vector<void *> recv_buffers;
+  std::vector<std::size_t> recv_buffer_idx;
 };

@@ -19,9 +19,9 @@
 #pragma once
 
 #include <map>
-#include <rmm/mr/device/device_memory_resource.hpp>
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/detail/error.hpp>
+#include <rmm/mr/device/device_memory_resource.hpp>
 #include "communicator.h"
 
 /**
@@ -30,12 +30,9 @@
  */
 class registered_memory_resource final : public rmm::mr::device_memory_resource {
  public:
-  registered_memory_resource(UCXCommunicator *communicator)
-  {
-    this->communicator = communicator;
-  }
+  registered_memory_resource(UCXCommunicator* communicator) { this->communicator = communicator; }
 
-  ~registered_memory_resource()                           = default;
+  ~registered_memory_resource()                                 = default;
   registered_memory_resource(registered_memory_resource const&) = default;
   registered_memory_resource(registered_memory_resource&&)      = default;
   registered_memory_resource& operator=(registered_memory_resource const&) = default;
@@ -127,6 +124,6 @@ class registered_memory_resource final : public rmm::mr::device_memory_resource 
     return std::make_pair(free_size, total_size);
   }
 
-  UCXCommunicator *communicator;
-  std::map<void *, ucp_mem_h> registered_handles;
+  UCXCommunicator* communicator;
+  std::map<void*, ucp_mem_h> registered_handles;
 };
