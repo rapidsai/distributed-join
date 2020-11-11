@@ -240,13 +240,6 @@ virtual void initialize();
  */
 virtual void setup_cache(int64_t ncaches, int64_t cache_size);
 
-/**
- * Register the communication buffer.
- *
- * Note: To use this interface, each rank must have the same number of communication buffers.
- */
-virtual void warmup_cache();
-
 using UCXCommunicator::send;
 virtual comm_handle_t send(const void *buf, int64_t count, int element_size, int dest, int tag);
 using UCXCommunicator::recv;
@@ -318,6 +311,7 @@ bool wait_recv(RecvInfo *info);
 comm_handle_t recv_helper(void **buf, int64_t *count, int element_size, int source, int tag);
 
 void *cache_start_addr;
+ucp_mem_h cache_mem_handle;
 
 };
 
