@@ -141,3 +141,10 @@ test/
     compare_against_shared.cu   Test the correctness of the distributed-join compared to shared-memory implementation on random tables.
     prebuild.cu                 Test the correctness of the distributed-join compared to known solution.
 ```
+
+## Code formatting
+
+This repo uses `clang-format` for code formatting. To format the code, make sure `clang-format` is installed and run
+```bash
+./run-clang-format.py -p <path to clang-format>
+```

@@ -30,6 +30,7 @@
 
 #include <mpi.h>
 #include <cudf/column/column.hpp>
+#include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
 #include <cudf/detail/hashing.hpp>
 #include <cudf/join.hpp>
