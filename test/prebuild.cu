@@ -14,58 +14,53 @@
  * limitations under the License.
  */
 
-#include <vector>
-#include <iostream>
-#include <cassert>
-#include <memory>
 #include <mpi.h>
+#include <cassert>
+#include <iostream>
+#include <memory>
+#include <vector>
 
+#include <thrust/execution_policy.h>
+#include <thrust/sequence.h>
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_factories.hpp>
+#include <cudf/join.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
-#include <cudf/join.hpp>
 #include <rmm/mr/device/per_device_resource.hpp>
 #include <rmm/mr/device/pool_memory_resource.hpp>
-#include <thrust/sequence.h>
-#include <thrust/execution_policy.h>
 
-#include "../src/topology.cuh"
 #include "../src/communicator.h"
-#include "../src/error.cuh"
 #include "../src/distribute_table.cuh"
 #include "../src/distributed_join.cuh"
+#include "../src/error.cuh"
+#include "../src/topology.cuh"
 
 using cudf::table;
 
-static cudf::size_type SIZE = 30000;  // must be a multiple of 5
+static cudf::size_type SIZE          = 30000;  // must be a multiple of 5
 static int OVER_DECOMPOSITION_FACTOR = 1;
-
 
 void parse_command_line_arguments(int argc, char *argv[])
 {
-    for (int iarg = 0; iarg < argc; iarg++) {
-        if (!strcmp(argv[iarg], "--size")) {
-            SIZE = atoi(argv[iarg + 1]);
-        }
+  for (int iarg = 0; iarg < argc; iarg++) {
+    if (!strcmp(argv[iarg], "--size")) { SIZE = atoi(argv[iarg + 1]); }
 
-        if (!strcmp(argv[iarg], "--over-decomposition-factor")) {
-            OVER_DECOMPOSITION_FACTOR = atoi(argv[iarg + 1]);
-        }
+    if (!strcmp(argv[iarg], "--over-decomposition-factor")) {
+      OVER_DECOMPOSITION_FACTOR = atoi(argv[iarg + 1]);
     }
+  }
 }
-
 
 __global__ void verify_correctness(const int *key, const int *col1, const int *col2, int size)
 {
-    for (size_t i = threadIdx.x + blockDim.x * blockIdx.x; i < size; i += blockDim.x * gridDim.x) {
-        assert(key[i] % 15 == 0);
-        assert(col1[i] == key[i] / 3);
-        assert(col2[i] == key[i] / 5);
-    }
+  for (size_t i = threadIdx.x + blockDim.x * blockIdx.x; i < size; i += blockDim.x * gridDim.x) {
+    assert(key[i] % 15 == 0);
+    assert(col1[i] == key[i] / 3);
+    assert(col2[i] == key[i] / 5);
+  }
 }
-
 
 /**
  * This helper function generates the left/right table used for testing join.
@@ -75,123 +70,119 @@ __global__ void verify_correctness(const int *key, const int *col1, const int *c
  * contains 0,3,6,9...etc. The second column is filled with consecutive integers and is used as
  * payload column.
  */
-std::unique_ptr<table>
-generate_table(int multiple)
+std::unique_ptr<table> generate_table(int multiple)
 {
-    std::vector<std::unique_ptr<cudf::column> > new_table;
+  std::vector<std::unique_ptr<cudf::column>> new_table;
 
-    // construct the key column
-    auto key_column = cudf::make_numeric_column(cudf::data_type(cudf::type_id::INT32), SIZE);
-    auto key_buffer = key_column->mutable_view().head<int>();
-    thrust::sequence(thrust::device, key_buffer, key_buffer + SIZE, 0, multiple);
-    new_table.push_back(std::move(key_column));
+  // construct the key column
+  auto key_column = cudf::make_numeric_column(cudf::data_type(cudf::type_id::INT32), SIZE);
+  auto key_buffer = key_column->mutable_view().head<int>();
+  thrust::sequence(thrust::device, key_buffer, key_buffer + SIZE, 0, multiple);
+  new_table.push_back(std::move(key_column));
 
-    // construct the payload column
-    auto payload_column = cudf::make_numeric_column(cudf::data_type(cudf::type_id::INT32), SIZE);
-    auto payload_buffer = payload_column->mutable_view().head<int>();
-    thrust::sequence(thrust::device, payload_buffer, payload_buffer + SIZE);
-    new_table.push_back(std::move(payload_column));
+  // construct the payload column
+  auto payload_column = cudf::make_numeric_column(cudf::data_type(cudf::type_id::INT32), SIZE);
+  auto payload_buffer = payload_column->mutable_view().head<int>();
+  thrust::sequence(thrust::device, payload_buffer, payload_buffer + SIZE);
+  new_table.push_back(std::move(payload_column));
 
-    return std::make_unique<table>(std::move(new_table));
+  return std::make_unique<table>(std::move(new_table));
 }
-
 
 int main(int argc, char *argv[])
 {
-    /* Initialize topology */
+  /* Initialize topology */
 
-    setup_topology(argc, argv);
+  setup_topology(argc, argv);
 
-    /* Parse command line arguments */
+  /* Parse command line arguments */
 
-    parse_command_line_arguments(argc, argv);
+  parse_command_line_arguments(argc, argv);
 
-    /* Initialize memory pool */
+  /* Initialize memory pool */
 
-    size_t free_memory, total_memory;
-    CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
-    const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
+  size_t free_memory, total_memory;
+  CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
+  const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
 
-    rmm::mr::device_memory_resource* mr = rmm::mr::get_current_device_resource();
-    rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource> pool_mr {mr, pool_size, pool_size};
-    rmm::mr::set_current_device_resource(&pool_mr);
+  rmm::mr::device_memory_resource *mr = rmm::mr::get_current_device_resource();
+  rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource> pool_mr{mr, pool_size, pool_size};
+  rmm::mr::set_current_device_resource(&pool_mr);
 
-    /* Initialize communicator */
+  /* Initialize communicator */
 
-    int mpi_rank;
-    int mpi_size;
-    MPI_CALL( MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank) );
-    MPI_CALL( MPI_Comm_size(MPI_COMM_WORLD, &mpi_size) );
+  int mpi_rank;
+  int mpi_size;
+  MPI_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank));
+  MPI_CALL(MPI_Comm_size(MPI_COMM_WORLD, &mpi_size));
 
-    UCXCommunicator* communicator = initialize_ucx_communicator(
-        // *2 because buffers are needed for both sends and receives
-        true, 2 * mpi_size, 100'000LL
-    );
+  UCXCommunicator *communicator = initialize_ucx_communicator(
+    // *2 because buffers are needed for both sends and receives
+    true,
+    2 * mpi_size,
+    100'000LL);
 
-    /* Generate input tables */
+  /* Generate input tables */
 
-    std::unique_ptr<table> left_table;
-    std::unique_ptr<table> right_table;
-    cudf::table_view left_view;
-    cudf::table_view right_view;
+  std::unique_ptr<table> left_table;
+  std::unique_ptr<table> right_table;
+  cudf::table_view left_view;
+  cudf::table_view right_view;
 
-    if (mpi_rank == 0) {
-        left_table = generate_table(3);
-        right_table = generate_table(5);
+  if (mpi_rank == 0) {
+    left_table  = generate_table(3);
+    right_table = generate_table(5);
 
-        left_view = left_table->view();
-        right_view = right_table->view();
+    left_view  = left_table->view();
+    right_view = right_table->view();
 
-        CUDA_RT_CALL( cudaStreamSynchronize(cudaStreamDefault) );
-    }
+    CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
+  }
 
-    /* Distribute input tables among ranks */
+  /* Distribute input tables among ranks */
 
-    auto local_left_table = distribute_table(left_view, communicator);
-    auto local_right_table = distribute_table(right_view, communicator);
+  auto local_left_table  = distribute_table(left_view, communicator);
+  auto local_right_table = distribute_table(right_view, communicator);
 
-    /* Distributed join */
+  /* Distributed join */
 
-    auto join_result = distributed_inner_join(
-        local_left_table->view(), local_right_table->view(),
-        {0}, {0}, {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
-        communicator, OVER_DECOMPOSITION_FACTOR
-    );
+  auto join_result = distributed_inner_join(local_left_table->view(),
+                                            local_right_table->view(),
+                                            {0},
+                                            {0},
+                                            {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
+                                            communicator,
+                                            OVER_DECOMPOSITION_FACTOR);
 
-    /* Merge table from worker ranks to the root rank */
+  /* Merge table from worker ranks to the root rank */
 
-    std::unique_ptr<table> merged_table = collect_tables(join_result->view(), communicator);
+  std::unique_ptr<table> merged_table = collect_tables(join_result->view(), communicator);
 
-    /* Verify Correctness */
+  /* Verify Correctness */
 
-    if (mpi_rank == 0) {
-        const int block_size {128};
-        int nblocks {-1};
+  if (mpi_rank == 0) {
+    const int block_size{128};
+    int nblocks{-1};
 
-        CUDA_RT_CALL(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
-            &nblocks, verify_correctness, block_size, 0
-        ));
+    CUDA_RT_CALL(
+      cudaOccupancyMaxActiveBlocksPerMultiprocessor(&nblocks, verify_correctness, block_size, 0));
 
-        // Since the key has to be a multiple of 5, the join result size is the size of left table
-        // divided by 5.
-        assert(merged_table->num_rows() == SIZE / 5);
+    // Since the key has to be a multiple of 5, the join result size is the size of left table
+    // divided by 5.
+    assert(merged_table->num_rows() == SIZE / 5);
 
-        verify_correctness<<<nblocks, block_size>>>(
-            merged_table->get_column(0).view().head<int>(),
-            merged_table->get_column(1).view().head<int>(),
-            merged_table->get_column(2).view().head<int>(),
-            merged_table->num_rows()
-        );
-    }
+    verify_correctness<<<nblocks, block_size>>>(merged_table->get_column(0).view().head<int>(),
+                                                merged_table->get_column(1).view().head<int>(),
+                                                merged_table->get_column(2).view().head<int>(),
+                                                merged_table->num_rows());
+  }
 
-    /* Cleanup */
+  /* Cleanup */
 
-    communicator->finalize();
-    delete communicator;
+  communicator->finalize();
+  delete communicator;
 
-    if (mpi_rank == 0) {
-        std::cerr << "Test case \"prebuild\" passes successfully.\n";
-    }
+  if (mpi_rank == 0) { std::cerr << "Test case \"prebuild\" passes successfully.\n"; }
 
-    return 0;
+  return 0;
 }
