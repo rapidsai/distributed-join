@@ -1,5 +1,6 @@
 ---
-# This file is copied from cuDF repo.
+# This file is copied from cuDF repo:
+#   https://github.com/rapidsai/cudf/blob/branch-0.17/cpp/.clang-format
 # Refer to the following link for the explanation of each params:
 #   http://releases.llvm.org/8.0.0/tools/clang/docs/ClangFormatStyleOptions.html
 Language: Cpp
