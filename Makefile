@@ -10,9 +10,11 @@ CUDA_CFLAGS=-I${CUDA_HOME}/include -arch=sm_70 --expt-extended-lambda --default-
 CUDA_LIBS=-L${CUDA_HOME}/lib64 -lcuda -lcudart
 NCCL_CFLAGS=-I${NCCL_HOME}/include
 NCCL_LIBS=-L${NCCL_HOME}/lib -lnccl
+NVCOMP_CFLAGS=-I${NVCOMP_HOME}/include
+NVCOMP_LIBS=-L${NVCOMP_HOME}/lib -lnvcomp
 
-CFLAGS=-g -std=c++14 ${NCCL_CFLAGS} ${MPI_CFLAGS} ${CUDA_CFLAGS} ${UCX_CFLAGS} ${CUDF_CFLAGS}
-LDFLAGS=${NCCL_LIBS} ${MPI_LIBS} ${CUDA_LIBS} ${UCX_LIBS} ${CUDF_LIBS}
+CFLAGS=-g -std=c++14 ${NCCL_CFLAGS} ${MPI_CFLAGS} ${CUDA_CFLAGS} ${UCX_CFLAGS} ${CUDF_CFLAGS} ${NVCOMP_CFLAGS}
+LDFLAGS=${NCCL_LIBS} ${MPI_LIBS} ${CUDA_LIBS} ${UCX_LIBS} ${CUDF_LIBS} ${NVCOMP_LIBS}
 
 generate_dataset=generate_dataset/generate_dataset.cuh generate_dataset/nvtx_helper.cuh
 src=src/comm.cuh src/error.cuh src/distribute_table.cuh src/distributed_join.cuh src/generate_table.cuh src/communicator.o src/registered_memory_resource.hpp

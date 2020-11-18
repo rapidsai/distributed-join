@@ -52,6 +52,7 @@ static int OVER_DECOMPOSITION_FACTOR               = 1;
 static std::string COMMUNICATOR_NAME               = "UCX";
 static bool USE_BUFFER_COMMUNICATOR                = false;
 static int64_t COMMUNICATOR_BUFFER_SIZE            = 1'600'000'000LL;
+static bool COMPRESSION                            = false;
 
 void parse_command_line_arguments(int argc, char *argv[])
 {
@@ -79,6 +80,8 @@ void parse_command_line_arguments(int argc, char *argv[])
     if (!strcmp(argv[iarg], "--communicator")) { COMMUNICATOR_NAME = argv[iarg + 1]; }
 
     if (!strcmp(argv[iarg], "--use-buffer-communicator")) { USE_BUFFER_COMMUNICATOR = true; }
+
+    if (!strcmp(argv[iarg], "--compression")) { COMPRESSION = true; }
   }
 }
 
@@ -108,6 +111,7 @@ void report_configuration()
   std::cout << "Communicator: " << COMMUNICATOR_NAME << std::endl;
   if (COMMUNICATOR_NAME == "UCX")
     std::cout << "Buffer communicator: " << USE_BUFFER_COMMUNICATOR << std::endl;
+  std::cout << "Compression: " << COMPRESSION << std::endl;
   std::cout << "================================" << std::endl;
 }
 
@@ -225,7 +229,8 @@ int main(int argc, char *argv[])
                            {0},
                            {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
                            communicator,
-                           OVER_DECOMPOSITION_FACTOR);
+                           OVER_DECOMPOSITION_FACTOR,
+                           COMPRESSION);
 
   MPI_Barrier(MPI_COMM_WORLD);
   double stop = MPI_Wtime();
