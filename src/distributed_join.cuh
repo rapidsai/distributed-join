@@ -33,8 +33,8 @@
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/concatenate.hpp>
-#include <cudf/detail/hashing.hpp>
 #include <cudf/join.hpp>
+#include <cudf/partitioning.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
@@ -448,11 +448,11 @@ std::unique_ptr<table> distributed_inner_join(
   std::unique_ptr<table> hashed_right;
   vector<cudf::size_type> right_offset;
 
-  std::tie(hashed_left, left_offset) = cudf::detail::hash_partition(
-    left, left_on, mpi_size * over_decom_factor, mr, cudaStreamPerThread);
+  std::tie(hashed_left, left_offset) =
+    cudf::hash_partition(left, left_on, mpi_size * over_decom_factor, mr);
 
-  std::tie(hashed_right, right_offset) = cudf::detail::hash_partition(
-    right, right_on, mpi_size * over_decom_factor, mr, cudaStreamPerThread);
+  std::tie(hashed_right, right_offset) =
+    cudf::hash_partition(right, right_on, mpi_size * over_decom_factor, mr);
 
   CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamPerThread));
 
