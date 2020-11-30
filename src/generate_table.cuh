@@ -70,13 +70,13 @@ std::pair<std::unique_ptr<table>, std::unique_ptr<table>> generate_build_probe_t
 
   constexpr cudf::data_type payload_type = cudf::data_type(cudf::type_to_id<PAYLOAD_T>());
 
-  build.push_back(std::move(cudf::make_numeric_column(key_type, build_table_nrows)));
+  build.push_back(cudf::make_numeric_column(key_type, build_table_nrows));
 
-  build.push_back(std::move(cudf::make_numeric_column(payload_type, build_table_nrows)));
+  build.push_back(cudf::make_numeric_column(payload_type, build_table_nrows));
 
-  probe.push_back(std::move(cudf::make_numeric_column(key_type, probe_table_nrows)));
+  probe.push_back(cudf::make_numeric_column(key_type, probe_table_nrows));
 
-  probe.push_back(std::move(cudf::make_numeric_column(payload_type, probe_table_nrows)));
+  probe.push_back(cudf::make_numeric_column(payload_type, probe_table_nrows));
 
   // Generate build and probe table data
 
