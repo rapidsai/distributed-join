@@ -685,4 +685,23 @@ std::unique_ptr<table> distributed_inner_join(
   return cudf::concatenate(batch_join_results_view);
 }
 
+/**
+ * This helper function runs compression and decompression on a small buffer to avoid nvcomp's setup
+ * time during the actual run.
+ */
+void warmup_nvcomp()
+{
+  constexpr size_t warmup_size = 1000;
+  rmm::device_buffer input_data(warmup_size * sizeof(int));
+  rmm::device_buffer compressed_data;
+  rmm::device_buffer decompressed_data(warmup_size * sizeof(int));
+  size_t compressed_size;
+
+  compression_functor{}.operator()<int>(
+    input_data.data(), warmup_size, compressed_data, compressed_size);
+
+  decompressor_functor{}.operator()<int>(
+    compressed_data.data(), compressed_size, decompressed_data.data(), warmup_size);
+}
+
 #endif  // __DISTRIBUTED_JOIN

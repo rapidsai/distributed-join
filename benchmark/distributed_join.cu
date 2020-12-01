@@ -179,6 +179,10 @@ int main(int argc, char *argv[])
     throw std::runtime_error("Unknown communicator name");
   }
 
+  /* Warmup nvcomp */
+
+  if (COMPRESSION) { warmup_nvcomp(); }
+
   /* Generate build table and probe table on each rank */
 
   std::unique_ptr<cudf::table> left;
