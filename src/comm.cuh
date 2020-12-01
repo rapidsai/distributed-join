@@ -79,8 +79,8 @@ void send_data_by_offset(const void *data,
                          Communicator *communicator,
                          bool self_send = true)
 {
-  int mpi_rank{communicator->mpi_rank};
-  int mpi_size{communicator->mpi_size};
+  int mpi_rank = communicator->mpi_rank;
+  int mpi_size = communicator->mpi_size;
 
   for (int itarget_rank = 0; itarget_rank < mpi_size; itarget_rank++) {
     if (!self_send && itarget_rank == mpi_rank) continue;
@@ -126,8 +126,8 @@ void recv_data_by_offset(void *data,
                          Communicator *communicator,
                          bool self_recv = true)
 {
-  int mpi_rank{communicator->mpi_rank};
-  int mpi_size{communicator->mpi_size};
+  int mpi_rank = communicator->mpi_rank;
+  int mpi_size = communicator->mpi_size;
 
   for (int isource_rank = 0; isource_rank < mpi_size; isource_rank++) {
     if (!self_recv && mpi_rank == isource_rank) continue;

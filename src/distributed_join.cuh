@@ -194,7 +194,7 @@ struct compression_functor {
 };
 
 struct decompressor_functor {
-  template <typename T>
+  template <typename T, std::enable_if_t<std::is_integral<T>::value> * = nullptr>
   void operator()(const void *compressed_data,
                   size_t compressed_size,
                   void *output,
@@ -211,6 +211,15 @@ struct decompressor_functor {
       temp_space.data(), temp_size, static_cast<T *>(output), output_count, cudaStreamDefault);
     CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
   }
+
+  template <typename T, std::enable_if_t<!std::is_integral<T>::value> * = nullptr>
+  void operator()(const void *compressed_data,
+                  size_t compressed_size,
+                  void *output,
+                  size_t expected_output_count)
+  {
+    assert(false && "Unsupported data type for decompressor");
+  }
 };
 
 void all_to_all_comm_with_compression(cudf::table_view input,
@@ -226,8 +235,8 @@ void all_to_all_comm_with_compression(cudf::table_view input,
   compressed_output.resize(ncols);
   compressed_recv_offset.resize(ncols);
 
-  int mpi_rank{communicator->mpi_rank};
-  int mpi_size{communicator->mpi_size};
+  int mpi_rank = communicator->mpi_rank;
+  int mpi_size = communicator->mpi_size;
 
   for (cudf::size_type icol = 0; icol < ncols; icol++) {
     cudf::column_view column   = input.column(icol);
@@ -296,8 +305,8 @@ void all_to_all_comm_decompression(cudf::mutable_table_view output,
                                    Communicator *communicator,
                                    bool include_self = true)
 {
-  int mpi_rank{communicator->mpi_rank};
-  int mpi_size{communicator->mpi_size};
+  int mpi_rank          = communicator->mpi_rank;
+  int mpi_size          = communicator->mpi_size;
   cudf::size_type ncols = output.num_columns();
 
   for (cudf::size_type icol = 0; icol < ncols; icol++) {
@@ -311,7 +320,8 @@ void all_to_all_comm_decompression(cudf::mutable_table_view output,
       cudf::type_dispatcher(
         dtype,
         decompressor_functor{},
-        (void *)((char *)compressed_output[icol].data() + compressed_recv_offset[icol][irank]),
+        static_cast<const void *>(static_cast<const char *>(compressed_output[icol].data()) +
+                                  +compressed_recv_offset[icol][irank]),
         compressed_recv_offset[icol][irank + 1] - compressed_recv_offset[icol][irank],
         (void *)(column.head<char>() + recv_offset[irank] * dtype_size),
         recv_offset[irank + 1] - recv_offset[irank]);
@@ -431,8 +441,8 @@ std::unique_ptr<table> distributed_inner_join(
     // we can get away with using just one thread.
   }
 
-  int mpi_rank{communicator->mpi_rank};
-  int mpi_size{communicator->mpi_size};
+  int mpi_rank = communicator->mpi_rank;
+  int mpi_size = communicator->mpi_size;
   std::chrono::time_point<high_resolution_clock> start_time;
   std::chrono::time_point<high_resolution_clock> stop_time;
 
