@@ -39,20 +39,6 @@
 
 using cudf::table;
 
-static cudf::size_type SIZE          = 30000;  // must be a multiple of 5
-static int OVER_DECOMPOSITION_FACTOR = 1;
-
-void parse_command_line_arguments(int argc, char *argv[])
-{
-  for (int iarg = 0; iarg < argc; iarg++) {
-    if (!strcmp(argv[iarg], "--size")) { SIZE = atoi(argv[iarg + 1]); }
-
-    if (!strcmp(argv[iarg], "--over-decomposition-factor")) {
-      OVER_DECOMPOSITION_FACTOR = atoi(argv[iarg + 1]);
-    }
-  }
-}
-
 __global__ void verify_correctness(const int *key, const int *col1, const int *col2, int size)
 {
   for (size_t i = threadIdx.x + blockDim.x * blockIdx.x; i < size; i += blockDim.x * gridDim.x) {
@@ -70,57 +56,32 @@ __global__ void verify_correctness(const int *key, const int *col1, const int *c
  * contains 0,3,6,9...etc. The second column is filled with consecutive integers and is used as
  * payload column.
  */
-std::unique_ptr<table> generate_table(int multiple)
+std::unique_ptr<table> generate_table(cudf::size_type size, int multiple)
 {
   std::vector<std::unique_ptr<cudf::column>> new_table;
 
   // construct the key column
-  auto key_column = cudf::make_numeric_column(cudf::data_type(cudf::type_id::INT32), SIZE);
+  auto key_column = cudf::make_numeric_column(cudf::data_type(cudf::type_id::INT32), size);
   auto key_buffer = key_column->mutable_view().head<int>();
-  thrust::sequence(thrust::device, key_buffer, key_buffer + SIZE, 0, multiple);
+  thrust::sequence(thrust::device, key_buffer, key_buffer + size, 0, multiple);
   new_table.push_back(std::move(key_column));
 
   // construct the payload column
-  auto payload_column = cudf::make_numeric_column(cudf::data_type(cudf::type_id::INT32), SIZE);
+  auto payload_column = cudf::make_numeric_column(cudf::data_type(cudf::type_id::INT32), size);
   auto payload_buffer = payload_column->mutable_view().head<int>();
-  thrust::sequence(thrust::device, payload_buffer, payload_buffer + SIZE);
+  thrust::sequence(thrust::device, payload_buffer, payload_buffer + size);
   new_table.push_back(std::move(payload_column));
 
   return std::make_unique<table>(std::move(new_table));
 }
 
-int main(int argc, char *argv[])
+void run_test(cudf::size_type size,  // must be a multiple of 5
+              int over_decomposition_factor,
+              bool compression,
+              Communicator *communicator)
 {
-  /* Initialize topology */
-
-  setup_topology(argc, argv);
-
-  /* Parse command line arguments */
-
-  parse_command_line_arguments(argc, argv);
-
-  /* Initialize memory pool */
-
-  size_t free_memory, total_memory;
-  CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
-  const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
-
-  rmm::mr::device_memory_resource *mr = rmm::mr::get_current_device_resource();
-  rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource> pool_mr{mr, pool_size, pool_size};
-  rmm::mr::set_current_device_resource(&pool_mr);
-
-  /* Initialize communicator */
-
   int mpi_rank;
-  int mpi_size;
   MPI_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank));
-  MPI_CALL(MPI_Comm_size(MPI_COMM_WORLD, &mpi_size));
-
-  UCXCommunicator *communicator = initialize_ucx_communicator(
-    // *2 because buffers are needed for both sends and receives
-    true,
-    2 * mpi_size,
-    100'000LL);
 
   /* Generate input tables */
 
@@ -130,8 +91,8 @@ int main(int argc, char *argv[])
   cudf::table_view right_view;
 
   if (mpi_rank == 0) {
-    left_table  = generate_table(3);
-    right_table = generate_table(5);
+    left_table  = generate_table(size, 3);
+    right_table = generate_table(size, 5);
 
     left_view  = left_table->view();
     right_view = right_table->view();
@@ -152,7 +113,8 @@ int main(int argc, char *argv[])
                                             {0},
                                             {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
                                             communicator,
-                                            OVER_DECOMPOSITION_FACTOR);
+                                            over_decomposition_factor,
+                                            compression);
 
   /* Merge table from worker ranks to the root rank */
 
@@ -169,20 +131,56 @@ int main(int argc, char *argv[])
 
     // Since the key has to be a multiple of 5, the join result size is the size of left table
     // divided by 5.
-    assert(merged_table->num_rows() == SIZE / 5);
+    assert(merged_table->num_rows() == size / 5);
 
     verify_correctness<<<nblocks, block_size>>>(merged_table->get_column(0).view().head<int>(),
                                                 merged_table->get_column(1).view().head<int>(),
                                                 merged_table->get_column(2).view().head<int>(),
                                                 merged_table->num_rows());
+
+    CUDA_RT_CALL(cudaDeviceSynchronize());
+    std::cerr << "Test case (" << size << "," << over_decomposition_factor << "," << compression
+              << ") passes successfully.\n";
   }
+}
+
+int main(int argc, char *argv[])
+{
+  /* Initialize topology */
+
+  setup_topology(argc, argv);
+
+  /* Initialize memory pool */
+
+  size_t free_memory, total_memory;
+  CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
+  const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
+
+  rmm::mr::device_memory_resource *mr = rmm::mr::get_current_device_resource();
+  rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource> pool_mr{mr, pool_size, pool_size};
+  rmm::mr::set_current_device_resource(&pool_mr);
+
+  /* Initialize communicator */
+
+  int mpi_size;
+  MPI_CALL(MPI_Comm_size(MPI_COMM_WORLD, &mpi_size));
+
+  UCXCommunicator *communicator = initialize_ucx_communicator(
+    true,
+    2 * mpi_size,  // *2 because buffers are needed for both sends and receives
+    100'000LL);
+
+  /* Run test */
+
+  run_test(30'000, 1, false, communicator);
+  run_test(300'000, 1, false, communicator);
+  run_test(300'000, 4, false, communicator);
+  run_test(300'000, 4, true, communicator);
 
   /* Cleanup */
 
   communicator->finalize();
   delete communicator;
-
-  if (mpi_rank == 0) { std::cerr << "Test case \"prebuild\" passes successfully.\n"; }
 
   return 0;
 }
