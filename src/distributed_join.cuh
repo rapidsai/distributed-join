@@ -125,8 +125,8 @@ void communicate_sizes(vector<cudf::size_type> const &send_offset,
 /**
  * All-to-all communication of a single batch.
  *
- * Note: This call is nonblocking and should be enclosed by `communicator->start()` and
- * `communicator->stop()`.
+ * Note: If the communicator supports grouping by batches, this call is nonblocking and should
+ * be enclosed by `communicator->start()` and `communicator->stop()`.
  *
  * This function needs to be called collectively by all ranks in MPI_COMM_WORLD. For every ranks,
  * all arguments are significant.
@@ -164,6 +164,16 @@ void all_to_all_comm(cudf::table_view input,
 }
 
 struct compression_functor {
+  /**
+   * Compress a buffer using cascaded compression.
+   *
+   * @param[in] uncompressed_data Input buffer to be compressed.
+   * @param[in] uncompressed_count Number of elements to be compressed. Note that in general this
+   * is different from the size of the buffer.
+   * @param[out] compressed_data Output data after cascaded compression. This argument does not
+   * need to be preallocated.
+   * @param[out] compressed_size Number of bytes of *compressed_data*.
+   */
   template <typename T, std::enable_if_t<std::is_integral<T>::value> * = nullptr>
   void operator()(const void *uncompressed_data,
                   size_t uncompressed_count,
@@ -194,6 +204,15 @@ struct compression_functor {
 };
 
 struct decompressor_functor {
+  /**
+   * Decompress a buffer previously compressed by `compression_functor{}.operator()`.
+   *
+   * @param[in] compressed_data Input data to be decompressed.
+   * @param[in] compressed_size Size of *compressed_data* in bytes.
+   * @param[out] output Decompressed output. This argument needs to be preallocated.
+   * @param[out] expected_output_count Expected number of elements in the decompressed buffer. This
+   * argument is only used for error checking purposes.
+   */
   template <typename T, std::enable_if_t<std::is_integral<T>::value> * = nullptr>
   void operator()(const void *compressed_data,
                   size_t compressed_size,
@@ -222,6 +241,32 @@ struct decompressor_functor {
   }
 };
 
+/**
+ * All-to-all communication of a single batch, with data compression.
+ *
+ * After the all-to-all communication is completed, the data can be decompressed with
+ * *all_to_all_comm_decompression*.
+ *
+ * Note: If the communicator supports grouping by batches, this call is nonblocking and should
+ * be enclosed by `communicator->start()` and `communicator->stop()`.
+ *
+ * @param[in] input Table to be communicated.
+ * @param[in] send_offset Vector of length mpi_size + 1 such that `send_offset[i+1] -
+ * send_offset[i]` is the number of elements sent from the current rank to rank i during the
+ * all-to-all communication.
+ * @param[out] compressed_input Vector of length number of columns, where each element holds the
+ * compressed data of a column to be sent to remote GPUs. This argument does not need to be
+ * preallocated, but the user of this function needs to keep it alive until the communication is
+ * finished.
+ * @param[out] compressed_output Vector of length number of columns, where each element holds the
+ * compressed data of a column received from each remote GPUs. This argument does not need to be
+ * preallocated.
+ * @param[out] compressed_recv_offset `compressed_recv_offset[i,j]` represents the start index of
+ * compressed data in `compressed_output[i]` received from rank `j`.
+ * @param[in] communicator An instance of `Communicator` used for communication.
+ * @param[in] include_self If true, this function will send the partition destined to the current
+ * rank.
+ */
 void all_to_all_comm_with_compression(cudf::table_view input,
                                       vector<cudf::size_type> const &send_offset,
                                       vector<rmm::device_buffer> &compressed_input,
@@ -260,7 +305,7 @@ void all_to_all_comm_with_compression(cudf::table_view input,
     }
 
     // calculate and communicate offsets for compressed column
-    vector<int64_t> compressed_send_offset(mpi_size + 1, -1);
+    vector<int64_t> compressed_send_offset(mpi_size + 1);
     compressed_send_offset[0] = 0;
     for (int irank = 0; irank < mpi_size; irank++) {
       compressed_send_offset[irank + 1] =
@@ -298,6 +343,23 @@ void all_to_all_comm_with_compression(cudf::table_view input,
   }
 }
 
+/**
+ * Decompress the data after receiving from remote GPUs.
+ *
+ * @param[out] output Decompressed table. This argument needs to be preallocated with number of rows
+ * equal to the last element in `recv_offset`.
+ * @param[in] recv_offset Vector of size `mpi_size + 1` such that `recv_offset[i]` represents the
+ * start index of `output` to receive data from rank `i`.
+ * @param[in] compressed_output Vector of length number of columns, where each element holds the
+ * compressed data of a column received from each remote GPUs. This is the output of
+ * *all_to_all_comm_with_compression*.
+ * @param[in] compressed_recv_offset `compressed_recv_offset[i,j]` represents the start index of
+ * compressed data in `compressed_output[i]` received from rank `j`. This is the output of
+ * *all_to_all_comm_with_compression*.
+ * @param[in] communicator An instance of `Communicator` used for communication.
+ * @param[in] include_self This argument should be kept consistent with the argument used in
+ * *all_to_all_comm_with_compression*.
+ */
 void all_to_all_comm_decompression(cudf::mutable_table_view output,
                                    vector<int64_t> const &recv_offset,
                                    vector<rmm::device_buffer> const &compressed_output,
@@ -635,6 +697,7 @@ std::unique_ptr<table> distributed_inner_join(
 
     if (communicator->group_by_batch()) communicator->stop();
 
+    // compressed columns are not needed after all-to-all communication completes
     compressed_input_left.clear();
     compressed_input_right.clear();
 
