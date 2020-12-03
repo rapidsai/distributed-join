@@ -521,12 +521,12 @@ std::unique_ptr<table> distributed_inner_join(
   vector<cudf::size_type> right_offset;
 
   std::tie(hashed_left, left_offset) =
-    cudf::hash_partition(left, left_on, mpi_size * over_decom_factor, mr);
+    cudf::hash_partition(left, left_on, mpi_size * over_decom_factor, cudf::hash_id::HASH_IDENTITY);
 
-  std::tie(hashed_right, right_offset) =
-    cudf::hash_partition(right, right_on, mpi_size * over_decom_factor, mr);
+  std::tie(hashed_right, right_offset) = cudf::hash_partition(
+    right, right_on, mpi_size * over_decom_factor, cudf::hash_id::HASH_IDENTITY);
 
-  CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamPerThread));
+  CUDA_RT_CALL(cudaStreamSynchronize(0));
 
   left_offset.push_back(left.num_rows());
   right_offset.push_back(right.num_rows());
