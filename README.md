@@ -64,10 +64,14 @@ means smaller batch size. `1` means no overlap. Default: `1`.
 
 This option can be either "UCX" or "NCCL", which controls what communicator to use. Default: `UCX`.
 
-**--use-buffer-communicator**
+**--registration-method [STR]**
 
-If this option is specified, UCX communication goes through a pre-registered staging buffer. This
-option is recommeneded for IB system to reduce registration overhead.
+If the UCX communicator is selected, this option can be either "none", "preregistered" or "buffer",
+to control how registration is performed for GPUDirect RDMA.
+- "none": No preregistration.
+- "preregistered": The whole RMM memory pool will be preregistered.
+- "buffer": Preregister a set of communication buffers. The communication in distributed join will
+go through these buffers.
 
 ## Running
 

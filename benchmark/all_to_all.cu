@@ -29,19 +29,19 @@
 #include "../src/error.cuh"
 #include "../src/topology.cuh"
 
-static int64_t SIZE                  = 800'000'000LL;
-static int64_t BUFFER_SIZE           = 25'000'000LL;
-static int REPEAT                    = 4;
-static bool WARM_UP                  = false;
-static std::string COMMUNICATOR_NAME = "UCX";
-static bool USE_BUFFER_COMMUNICATOR  = false;
+static int64_t SIZE                     = 800'000'000LL;
+static int64_t COMMUNICATOR_BUFFER_SIZE = 25'000'000LL;
+static int REPEAT                       = 4;
+static bool WARM_UP                     = false;
+static std::string COMMUNICATOR_NAME    = "UCX";
+static std::string REGISTRATION_METHOD  = "preregistered";
 
 void parse_command_line_arguments(int argc, char *argv[])
 {
   for (int iarg = 0; iarg < argc; iarg++) {
     if (!strcmp(argv[iarg], "--size")) { SIZE = atol(argv[iarg + 1]); }
 
-    if (!strcmp(argv[iarg], "--buffer-size")) { BUFFER_SIZE = atol(argv[iarg + 1]); }
+    if (!strcmp(argv[iarg], "--buffer-size")) { COMMUNICATOR_BUFFER_SIZE = atol(argv[iarg + 1]); }
 
     if (!strcmp(argv[iarg], "--repeat")) { REPEAT = atoi(argv[iarg + 1]); }
 
@@ -49,7 +49,7 @@ void parse_command_line_arguments(int argc, char *argv[])
 
     if (!strcmp(argv[iarg], "--communicator")) { COMMUNICATOR_NAME = argv[iarg + 1]; }
 
-    if (!strcmp(argv[iarg], "--use-buffer-communicator")) { USE_BUFFER_COMMUNICATOR = true; }
+    if (!strcmp(argv[iarg], "--registration-method")) { REGISTRATION_METHOD = argv[iarg + 1]; }
   }
 }
 
@@ -65,9 +65,11 @@ void report_configuration()
   std::cout << std::boolalpha;
   std::cout << "Size: " << SIZE << std::endl;
   std::cout << "Communicator: " << COMMUNICATOR_NAME << std::endl;
-  if (COMMUNICATOR_NAME == "UCX")
-    std::cout << "Buffer communicator: " << USE_BUFFER_COMMUNICATOR << std::endl;
-  if (USE_BUFFER_COMMUNICATOR) std::cout << "Buffer size: " << BUFFER_SIZE << std::endl;
+  if (COMMUNICATOR_NAME == "UCX") {
+    std::cout << "Registration method: " << REGISTRATION_METHOD << std::endl;
+    if (REGISTRATION_METHOD == "buffer")
+      std::cout << "Communicator buffer size: " << COMMUNICATOR_BUFFER_SIZE << std::endl;
+  }
   std::cout << "Repeat: " << REPEAT << std::endl;
   std::cout << "Warmup: " << WARM_UP << std::endl;
   std::cout << "================================" << std::endl;
@@ -79,31 +81,28 @@ int main(int argc, char *argv[])
 
   setup_topology(argc, argv);
 
-  /* Parse command line arguments */
-
-  parse_command_line_arguments(argc, argv);
-  report_configuration();
-
-  /* Initialize memory pool */
-
-  rmm::mr::device_memory_resource *mr = rmm::mr::get_current_device_resource();
-
-  /* Initialize communicator */
-
   int mpi_rank;
   int mpi_size;
   MPI_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank));
   MPI_CALL(MPI_Comm_size(MPI_COMM_WORLD, &mpi_size));
 
-  Communicator *communicator;
-  if (COMMUNICATOR_NAME == "UCX") {
-    communicator = initialize_ucx_communicator(USE_BUFFER_COMMUNICATOR, 2 * mpi_size, BUFFER_SIZE);
-  } else if (COMMUNICATOR_NAME == "NCCL") {
-    communicator = new NCCLCommunicator;
-    communicator->initialize();
-  } else {
-    throw std::runtime_error("Unknown communicator name");
-  }
+  /* Parse command line arguments */
+
+  parse_command_line_arguments(argc, argv);
+  report_configuration();
+
+  /* Initialize communicator and memory pool */
+
+  Communicator *communicator{nullptr};
+  registered_memory_resource *registered_mr{nullptr};
+  rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource> *pool_mr{nullptr};
+
+  setup_memory_pool_and_communicator(communicator,
+                                     registered_mr,
+                                     pool_mr,
+                                     COMMUNICATOR_NAME,
+                                     REGISTRATION_METHOD,
+                                     COMMUNICATOR_BUFFER_SIZE);
 
   /* Warmup if necessary */
 
@@ -113,8 +112,8 @@ int main(int argc, char *argv[])
     std::vector<void *> warmup_recv_buffer(mpi_size, nullptr);
 
     for (int irank = 0; irank < mpi_size; irank++) {
-      warmup_send_buffer[irank] = mr->allocate(WARMUP_BUFFER_SIZE, cudaStreamDefault);
-      warmup_recv_buffer[irank] = mr->allocate(WARMUP_BUFFER_SIZE, cudaStreamDefault);
+      warmup_send_buffer[irank] = pool_mr->allocate(WARMUP_BUFFER_SIZE, cudaStreamDefault);
+      warmup_recv_buffer[irank] = pool_mr->allocate(WARMUP_BUFFER_SIZE, cudaStreamDefault);
     }
 
     CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
@@ -136,8 +135,8 @@ int main(int argc, char *argv[])
     communicator->stop();
 
     for (int irank = 0; irank < mpi_rank; irank++) {
-      mr->deallocate(warmup_send_buffer[irank], WARMUP_BUFFER_SIZE, cudaStreamDefault);
-      mr->deallocate(warmup_recv_buffer[irank], WARMUP_BUFFER_SIZE, cudaStreamDefault);
+      pool_mr->deallocate(warmup_send_buffer[irank], WARMUP_BUFFER_SIZE, cudaStreamDefault);
+      pool_mr->deallocate(warmup_recv_buffer[irank], WARMUP_BUFFER_SIZE, cudaStreamDefault);
     }
 
     CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
@@ -149,8 +148,8 @@ int main(int argc, char *argv[])
   std::vector<void *> recv_buffer(mpi_size, nullptr);
 
   for (int irank = 0; irank < mpi_size; irank++) {
-    send_buffer[irank] = mr->allocate(SIZE / mpi_size, cudaStreamDefault);
-    recv_buffer[irank] = mr->allocate(SIZE / mpi_size, cudaStreamDefault);
+    send_buffer[irank] = pool_mr->allocate(SIZE / mpi_size, cudaStreamDefault);
+    recv_buffer[irank] = pool_mr->allocate(SIZE / mpi_size, cudaStreamDefault);
   }
 
   CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
@@ -189,14 +188,14 @@ int main(int argc, char *argv[])
   /* Cleanup */
 
   for (int irank = 0; irank < mpi_rank; irank++) {
-    mr->deallocate(send_buffer[irank], SIZE / mpi_size, cudaStreamDefault);
-    mr->deallocate(recv_buffer[irank], SIZE / mpi_size, cudaStreamDefault);
+    pool_mr->deallocate(send_buffer[irank], SIZE / mpi_size, cudaStreamDefault);
+    pool_mr->deallocate(recv_buffer[irank], SIZE / mpi_size, cudaStreamDefault);
   }
 
   CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
 
-  communicator->finalize();
-  delete communicator;
+  destroy_memory_pool_and_communicator(
+    communicator, registered_mr, pool_mr, COMMUNICATOR_NAME, REGISTRATION_METHOD);
 
   MPI_CALL(MPI_Finalize());
 
