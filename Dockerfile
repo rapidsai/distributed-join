@@ -15,12 +15,12 @@ SHELL ["/bin/bash", "-c"]
 WORKDIR /root
 RUN conda create --name cudf_release \
     && source activate cudf_release \
-    && conda install -c rapidsai-nightly -c nvidia -c conda-forge -c defaults \
+    && conda install -c rapidsai-nightly -c nvidia -c conda-forge -c defaults -y \
         cudf=0.17 \
         python=3.8 \
         cudatoolkit=11.0 \
         nccl \
-    && conda clean --all
+    && conda clean -a -y
 ENV CUDF_HOME=/conda/envs/cudf_release
 ENV NCCL_HOME=${CUDF_HOME}
 ENV LD_LIBRARY_PATH=${CUDF_HOME}/lib:${LD_LIBRARY_PATH}
