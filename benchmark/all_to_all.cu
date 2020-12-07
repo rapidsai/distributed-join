@@ -29,27 +29,35 @@
 #include "../src/error.cuh"
 #include "../src/topology.cuh"
 
-static int64_t SIZE                     = 800'000'000LL;
-static int64_t COMMUNICATOR_BUFFER_SIZE = 25'000'000LL;
-static int REPEAT                       = 4;
-static bool WARM_UP                     = false;
-static std::string COMMUNICATOR_NAME    = "UCX";
-static std::string REGISTRATION_METHOD  = "preregistered";
+static int REPEAT                           = 4;
+static std::string COMMUNICATOR_NAME        = "UCX";
+static std::string REGISTRATION_METHOD      = "preregistered";
+static int64_t COMMUNICATOR_BUFFER_SIZE     = 25'000'000LL;
+static constexpr int64_t WARMUP_BUFFER_SIZE = 4'000'000LL;
+static const std::vector<int64_t> SIZES{1'000'000LL,
+                                        2'000'000LL,
+                                        4'000'000LL,
+                                        8'000'000LL,
+                                        16'000'000LL,
+                                        32'000'000LL,
+                                        64'000'000LL,
+                                        128'000'000LL,
+                                        256'000'000LL,
+                                        512'000'000LL,
+                                        1024'000'000LL,
+                                        2048'000'000LL,
+                                        4096'000'000LL};
 
 void parse_command_line_arguments(int argc, char *argv[])
 {
   for (int iarg = 0; iarg < argc; iarg++) {
-    if (!strcmp(argv[iarg], "--size")) { SIZE = atol(argv[iarg + 1]); }
-
-    if (!strcmp(argv[iarg], "--buffer-size")) { COMMUNICATOR_BUFFER_SIZE = atol(argv[iarg + 1]); }
-
     if (!strcmp(argv[iarg], "--repeat")) { REPEAT = atoi(argv[iarg + 1]); }
-
-    if (!strcmp(argv[iarg], "--warm-up")) { WARM_UP = true; }
 
     if (!strcmp(argv[iarg], "--communicator")) { COMMUNICATOR_NAME = argv[iarg + 1]; }
 
     if (!strcmp(argv[iarg], "--registration-method")) { REGISTRATION_METHOD = argv[iarg + 1]; }
+
+    if (!strcmp(argv[iarg], "--buffer-size")) { COMMUNICATOR_BUFFER_SIZE = atol(argv[iarg + 1]); }
   }
 }
 
@@ -63,7 +71,6 @@ void report_configuration()
 
   std::cout << "========== Parameters ==========" << std::endl;
   std::cout << std::boolalpha;
-  std::cout << "Size: " << SIZE << std::endl;
   std::cout << "Communicator: " << COMMUNICATOR_NAME << std::endl;
   if (COMMUNICATOR_NAME == "UCX") {
     std::cout << "Registration method: " << REGISTRATION_METHOD << std::endl;
@@ -71,8 +78,73 @@ void report_configuration()
       std::cout << "Communicator buffer size: " << COMMUNICATOR_BUFFER_SIZE << std::endl;
   }
   std::cout << "Repeat: " << REPEAT << std::endl;
-  std::cout << "Warmup: " << WARM_UP << std::endl;
   std::cout << "================================" << std::endl;
+}
+
+void run_all_to_all(int64_t size,
+                    Communicator *communicator,
+                    rmm::mr::device_memory_resource *mr,
+                    bool print_result = true)
+{
+  int mpi_rank;
+  int mpi_size;
+  MPI_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank));
+  MPI_CALL(MPI_Comm_size(MPI_COMM_WORLD, &mpi_size));
+
+  /* Allocate send/recv buffers */
+
+  std::vector<void *> send_buffer(mpi_size, nullptr);
+  std::vector<void *> recv_buffer(mpi_size, nullptr);
+
+  for (int irank = 0; irank < mpi_size; irank++) {
+    if (irank == mpi_rank) continue;
+    send_buffer[irank] = mr->allocate(size / mpi_size, rmm::cuda_stream_default);
+    recv_buffer[irank] = mr->allocate(size / mpi_size, rmm::cuda_stream_default);
+  }
+
+  CUDA_RT_CALL(cudaStreamSynchronize(0));
+
+  /* Communication */
+
+  MPI_Barrier(MPI_COMM_WORLD);
+  cudaProfilerStart();
+  double start = MPI_Wtime();
+
+  for (int run = 0; run < REPEAT; run++) {
+    communicator->start();
+
+    for (int irank = 0; irank < mpi_size; irank++) {
+      if (irank != mpi_rank) communicator->send(send_buffer[irank], size / mpi_size, 1, irank);
+    }
+
+    for (int irank = 0; irank < mpi_size; irank++) {
+      if (irank != mpi_rank) communicator->recv(recv_buffer[irank], size / mpi_size, 1, irank);
+    }
+
+    communicator->stop();
+  }
+
+  double stop = MPI_Wtime();
+  cudaProfilerStop();
+
+  MPI_Barrier(MPI_COMM_WORLD);
+
+  if (mpi_rank == 0 && print_result) {
+    std::cout << "Size (MB): " << size / 1e6 << ", "
+              << "Elasped time (s): " << stop - start << ", "
+              << "Bandwidth per GPU (GB/s): "
+              << (double)size / mpi_size * (mpi_size - 1) * REPEAT / (stop - start) / 1e9
+              << std::endl;
+  }
+
+  /* Deallocate send/recv buffers */
+
+  for (int irank = 0; irank < mpi_rank; irank++) {
+    mr->deallocate(send_buffer[irank], size / mpi_size, rmm::cuda_stream_default);
+    mr->deallocate(recv_buffer[irank], size / mpi_size, rmm::cuda_stream_default);
+  }
+
+  CUDA_RT_CALL(cudaStreamSynchronize(0));
 }
 
 int main(int argc, char *argv[])
@@ -104,95 +176,15 @@ int main(int argc, char *argv[])
                                      REGISTRATION_METHOD,
                                      COMMUNICATOR_BUFFER_SIZE);
 
-  /* Warmup if necessary */
+  /* Warmup */
 
-  if (WARM_UP) {
-    const int64_t WARMUP_BUFFER_SIZE = 4'000'000LL;
-    std::vector<void *> warmup_send_buffer(mpi_size, nullptr);
-    std::vector<void *> warmup_recv_buffer(mpi_size, nullptr);
+  run_all_to_all(WARMUP_BUFFER_SIZE, communicator, pool_mr, false);
 
-    for (int irank = 0; irank < mpi_size; irank++) {
-      warmup_send_buffer[irank] = pool_mr->allocate(WARMUP_BUFFER_SIZE, cudaStreamDefault);
-      warmup_recv_buffer[irank] = pool_mr->allocate(WARMUP_BUFFER_SIZE, cudaStreamDefault);
-    }
+  /* Benchmark */
 
-    CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
-
-    communicator->start();
-
-    for (int irank = 0; irank < mpi_size; irank++) {
-      if (irank != mpi_rank) {
-        communicator->send(warmup_send_buffer[irank], WARMUP_BUFFER_SIZE, 1, irank);
-      }
-    }
-
-    for (int irank = 0; irank < mpi_size; irank++) {
-      if (irank != mpi_rank) {
-        communicator->recv(warmup_recv_buffer[irank], WARMUP_BUFFER_SIZE, 1, irank);
-      }
-    }
-
-    communicator->stop();
-
-    for (int irank = 0; irank < mpi_rank; irank++) {
-      pool_mr->deallocate(warmup_send_buffer[irank], WARMUP_BUFFER_SIZE, cudaStreamDefault);
-      pool_mr->deallocate(warmup_recv_buffer[irank], WARMUP_BUFFER_SIZE, cudaStreamDefault);
-    }
-
-    CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
-  }
-
-  /* Allocate data buffers */
-
-  std::vector<void *> send_buffer(mpi_size, nullptr);
-  std::vector<void *> recv_buffer(mpi_size, nullptr);
-
-  for (int irank = 0; irank < mpi_size; irank++) {
-    send_buffer[irank] = pool_mr->allocate(SIZE / mpi_size, cudaStreamDefault);
-    recv_buffer[irank] = pool_mr->allocate(SIZE / mpi_size, cudaStreamDefault);
-  }
-
-  CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
-
-  /* Communication */
-
-  MPI_Barrier(MPI_COMM_WORLD);
-  cudaProfilerStart();
-  double start = MPI_Wtime();
-
-  for (int icol = 0; icol < REPEAT; icol++) {
-    communicator->start();
-
-    for (int irank = 0; irank < mpi_size; irank++) {
-      if (irank != mpi_rank) communicator->send(send_buffer[irank], SIZE / mpi_size, 1, irank);
-    }
-
-    for (int irank = 0; irank < mpi_size; irank++) {
-      if (irank != mpi_rank) communicator->recv(recv_buffer[irank], SIZE / mpi_size, 1, irank);
-    }
-
-    communicator->stop();
-  }
-
-  double stop = MPI_Wtime();
-  cudaProfilerStop();
-
-  MPI_Barrier(MPI_COMM_WORLD);
-  if (mpi_rank == 0) {
-    std::cerr << "Elasped time (s) " << stop - start << std::endl;
-    std::cerr << "Bandwidth (GB/s) "
-              << (double)SIZE / mpi_size * (mpi_size - 1) * REPEAT / (stop - start) / 1e9
-              << std::endl;
-  }
+  for (const int64_t &size : SIZES) run_all_to_all(size, communicator, pool_mr, true);
 
   /* Cleanup */
-
-  for (int irank = 0; irank < mpi_rank; irank++) {
-    pool_mr->deallocate(send_buffer[irank], SIZE / mpi_size, cudaStreamDefault);
-    pool_mr->deallocate(recv_buffer[irank], SIZE / mpi_size, cudaStreamDefault);
-  }
-
-  CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
 
   destroy_memory_pool_and_communicator(
     communicator, registered_mr, pool_mr, COMMUNICATOR_NAME, REGISTRATION_METHOD);
