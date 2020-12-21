@@ -174,7 +174,7 @@ struct compression_functor {
    * need to be preallocated.
    * @param[out] compressed_size Number of bytes of *compressed_data*.
    */
-  template <typename T, std::enable_if_t<std::is_integral<T>::value> * = nullptr>
+  template <typename T>
   void operator()(const void *uncompressed_data,
                   size_t uncompressed_count,
                   rmm::device_buffer &compressed_data,
@@ -188,18 +188,12 @@ struct compression_functor {
     compressed_size = compressor.get_max_output_size(temp_space.data(), temp_size);
     compressed_data = rmm::device_buffer(compressed_size);
 
+    // Set the output buffer to 0 to get away a bug in nvcomp
+    CUDA_RT_CALL(cudaMemset(compressed_data.data(), 0, compressed_size));
+
     compressor.compress_async(
       temp_space.data(), temp_size, compressed_data.data(), &compressed_size, cudaStreamDefault);
     CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
-  }
-
-  template <typename T, std::enable_if_t<!std::is_integral<T>::value> * = nullptr>
-  void operator()(const void *uncompressed_data,
-                  size_t uncompressed_count,
-                  rmm::device_buffer &compressed_data,
-                  size_t &compressed_size)
-  {
-    assert(false && "Unsupported data type for cascaded compressor");
   }
 };
 
@@ -213,7 +207,7 @@ struct decompressor_functor {
    * @param[out] expected_output_count Expected number of elements in the decompressed buffer. This
    * argument is only used for error checking purposes.
    */
-  template <typename T, std::enable_if_t<std::is_integral<T>::value> * = nullptr>
+  template <typename T>
   void operator()(const void *compressed_data,
                   size_t compressed_size,
                   void *output,
@@ -229,15 +223,6 @@ struct decompressor_functor {
     decompressor.decompress_async(
       temp_space.data(), temp_size, static_cast<T *>(output), output_count, cudaStreamDefault);
     CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
-  }
-
-  template <typename T, std::enable_if_t<!std::is_integral<T>::value> * = nullptr>
-  void operator()(const void *compressed_data,
-                  size_t compressed_size,
-                  void *output,
-                  size_t expected_output_count)
-  {
-    assert(false && "Unsupported data type for decompressor");
   }
 };
 
