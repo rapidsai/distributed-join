@@ -31,7 +31,6 @@
 
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
-#include <rmm/mr/device/per_device_resource.hpp>
 #include <rmm/mr/device/pool_memory_resource.hpp>
 
 #include "../src/communicator.h"
@@ -50,7 +49,7 @@ static double SELECTIVITY                          = 0.3;
 static bool IS_BUILD_TABLE_KEY_UNIQUE              = true;
 static int OVER_DECOMPOSITION_FACTOR               = 1;
 static std::string COMMUNICATOR_NAME               = "UCX";
-static bool USE_BUFFER_COMMUNICATOR                = false;
+static std::string REGISTRATION_METHOD             = "preregistered";
 static int64_t COMMUNICATOR_BUFFER_SIZE            = 1'600'000'000LL;
 
 void parse_command_line_arguments(int argc, char *argv[])
@@ -78,7 +77,7 @@ void parse_command_line_arguments(int argc, char *argv[])
 
     if (!strcmp(argv[iarg], "--communicator")) { COMMUNICATOR_NAME = argv[iarg + 1]; }
 
-    if (!strcmp(argv[iarg], "--use-buffer-communicator")) { USE_BUFFER_COMMUNICATOR = true; }
+    if (!strcmp(argv[iarg], "--registration-method")) { REGISTRATION_METHOD = argv[iarg + 1]; }
   }
 }
 
@@ -107,7 +106,7 @@ void report_configuration()
   std::cout << "Over-decomposition factor: " << OVER_DECOMPOSITION_FACTOR << std::endl;
   std::cout << "Communicator: " << COMMUNICATOR_NAME << std::endl;
   if (COMMUNICATOR_NAME == "UCX")
-    std::cout << "Buffer communicator: " << USE_BUFFER_COMMUNICATOR << std::endl;
+    std::cout << "Registration method: " << REGISTRATION_METHOD << std::endl;
   std::cout << "================================" << std::endl;
 }
 
@@ -133,47 +132,20 @@ int main(int argc, char *argv[])
   MPI_CALL(MPI_Comm_size(MPI_COMM_WORLD, &mpi_size));
 
   Communicator *communicator{nullptr};
-  // `mr` holds reference to the registered memory resource, and *nullptr* if registered memory
-  // resource is not used.
-  registered_memory_resource *mr{nullptr};
+  // `registered_mr` holds reference to the registered memory resource, and *nullptr* if registered
+  // memory resource is not used.
+  registered_memory_resource *registered_mr{nullptr};
   // pool_mr need to live on heap because for registered memory resources, the memory pool needs
   // to deallocated before UCX cleanup, which can be achieved by calling the destructor of
   // `poll_mr`.
   rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource> *pool_mr{nullptr};
 
-  // Calculate the memory pool size
-  size_t free_memory, total_memory;
-  CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
-  const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
-
-  if (COMMUNICATOR_NAME == "UCX" && USE_BUFFER_COMMUNICATOR) {
-    // For UCX with buffer communicator, a memory pool is first constructed so that the
-    // communication buffers will be allocated in memory pool.
-    pool_mr = new rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource>(
-      rmm::mr::get_current_device_resource(), pool_size, pool_size);
-    rmm::mr::set_current_device_resource(pool_mr);
-    // *2 because buffers are needed for both sends and receives
-    const int num_comm_buffers = 2 * mpi_size;
-    communicator               = initialize_ucx_communicator(
-      true, num_comm_buffers, COMMUNICATOR_BUFFER_SIZE / num_comm_buffers - 100'000LL);
-  } else if (COMMUNICATOR_NAME == "UCX" && !USE_BUFFER_COMMUNICATOR) {
-    // For UCX with preregistered memory pool, a communicator is first constructed so that
-    // `registered_memory_resource` can use the communicator for buffer registrations.
-    UCXCommunicator *ucx_communicator = initialize_ucx_communicator(false, 0, 0);
-    communicator                      = ucx_communicator;
-    mr                                = new registered_memory_resource(ucx_communicator);
-    pool_mr =
-      new rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource>(mr, pool_size, pool_size);
-    rmm::mr::set_current_device_resource(pool_mr);
-  } else if (COMMUNICATOR_NAME == "NCCL") {
-    communicator = new NCCLCommunicator;
-    communicator->initialize();
-    pool_mr = new rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource>(
-      rmm::mr::get_current_device_resource(), pool_size, pool_size);
-    rmm::mr::set_current_device_resource(pool_mr);
-  } else {
-    throw std::runtime_error("Unknown communicator name");
-  }
+  setup_memory_pool_and_communicator(communicator,
+                                     registered_mr,
+                                     pool_mr,
+                                     COMMUNICATOR_NAME,
+                                     REGISTRATION_METHOD,
+                                     COMMUNICATOR_BUFFER_SIZE);
 
   /* Generate build table and probe table on each rank */
 
@@ -239,21 +211,8 @@ int main(int argc, char *argv[])
   join_result.reset();
   CUDA_RT_CALL(cudaDeviceSynchronize());
 
-  if (USE_BUFFER_COMMUNICATOR) {
-    // When finalizing buffer communicator, communication buffers need be deallocated, so
-    // `finalize` needs to be called before the memory pool is deleted.
-    communicator->finalize();
-    delete pool_mr;
-    delete mr;
-  } else {
-    // For registered memory resouce, the memory pool needs to be deleted before finalizing
-    // the communicator, so that all buffers can be deregistered through UCX.
-    delete pool_mr;
-    delete mr;
-    communicator->finalize();
-  }
-
-  delete communicator;
+  destroy_memory_pool_and_communicator(
+    communicator, registered_mr, pool_mr, COMMUNICATOR_NAME, REGISTRATION_METHOD);
 
   MPI_CALL(MPI_Finalize());
 
