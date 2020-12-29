@@ -37,6 +37,26 @@
 
 using cudf::table;
 
+struct generate_payload_functor {
+  template <typename T,
+            std::enable_if_t<not cudf::is_timestamp_t<T>::value and
+                             not cudf::is_duration_t<T>::value> * = nullptr>
+  void operator()(T *ptr, cudf::size_type nelements)
+  {
+    thrust::sequence(thrust::device, ptr, ptr + nelements);
+  }
+
+  template <
+    typename T,
+    std::enable_if_t<cudf::is_timestamp_t<T>::value or cudf::is_duration_t<T>::value> * = nullptr>
+  void operator()(T *ptr, cudf::size_type nelements)
+  {
+    thrust::sequence(thrust::device,
+                     reinterpret_cast<typename T::rep *>(ptr),
+                     reinterpret_cast<typename T::rep *>(ptr) + nelements);
+  }
+};
+
 /**
  * Generate a build table and a probe table for testing distributed join.
  *
@@ -72,11 +92,11 @@ std::pair<std::unique_ptr<table>, std::unique_ptr<table>> generate_build_probe_t
 
   build.push_back(cudf::make_numeric_column(key_type, build_table_nrows));
 
-  build.push_back(cudf::make_numeric_column(payload_type, build_table_nrows));
+  build.push_back(cudf::make_fixed_width_column(payload_type, build_table_nrows));
 
   probe.push_back(cudf::make_numeric_column(key_type, probe_table_nrows));
 
-  probe.push_back(cudf::make_numeric_column(payload_type, probe_table_nrows));
+  probe.push_back(cudf::make_fixed_width_column(payload_type, probe_table_nrows));
 
   // Generate build and probe table data
 
@@ -88,11 +108,10 @@ std::pair<std::unique_ptr<table>, std::unique_ptr<table>> generate_build_probe_t
                                                 rand_max,
                                                 uniq_build_tbl_keys);
 
-  auto build_payload_ptr = build[1]->mutable_view().head<PAYLOAD_T>();
-  thrust::sequence(thrust::device, build_payload_ptr, build_payload_ptr + build_table_nrows);
-
-  auto probe_payload_ptr = probe[1]->mutable_view().head<PAYLOAD_T>();
-  thrust::sequence(thrust::device, probe_payload_ptr, probe_payload_ptr + probe_table_nrows);
+  generate_payload_functor{}.operator()<PAYLOAD_T>(build[1]->mutable_view().head<PAYLOAD_T>(),
+                                                   build_table_nrows);
+  generate_payload_functor{}.operator()<PAYLOAD_T>(probe[1]->mutable_view().head<PAYLOAD_T>(),
+                                                   probe_table_nrows);
 
   CUDA_RT_CALL(cudaGetLastError());
   CUDA_RT_CALL(cudaDeviceSynchronize());
@@ -202,14 +221,14 @@ std::pair<std::unique_ptr<table>, std::unique_ptr<table>> generate_tables_distri
 
   vector<std::unique_ptr<column>> build_table_columns;
   for (cudf::size_type icol = 0; icol < pre_shuffle_build_table->num_columns(); icol++) {
-    build_table_columns.push_back(make_numeric_column(
+    build_table_columns.push_back(make_fixed_width_column(
       pre_shuffle_build_table->view().column(icol).type(), build_table_recv_offset.back()));
   }
   std::unique_ptr<table> build_table = std::make_unique<table>(std::move(build_table_columns));
 
   vector<std::unique_ptr<column>> probe_table_columns;
   for (cudf::size_type icol = 0; icol < pre_shuffle_probe_table->num_columns(); icol++) {
-    probe_table_columns.push_back(make_numeric_column(
+    probe_table_columns.push_back(make_fixed_width_column(
       pre_shuffle_probe_table->view().column(icol).type(), probe_table_recv_offset.back()));
   }
   std::unique_ptr<table> probe_table = std::make_unique<table>(std::move(probe_table_columns));

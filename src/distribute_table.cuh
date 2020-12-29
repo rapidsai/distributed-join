@@ -160,8 +160,7 @@ std::unique_ptr<cudf::table> distribute_table(cudf::table_view global_table,
   std::vector<std::unique_ptr<cudf::column>> local_table;
 
   for (int icol = 0; icol < ncols; icol++) {
-    auto new_column = cudf::make_numeric_column(columns_dtype[icol], local_table_size);
-    local_table.push_back(std::move(new_column));
+    local_table.push_back(cudf::make_fixed_width_column(columns_dtype[icol], local_table_size));
   }
 
   CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
@@ -225,7 +224,7 @@ std::unique_ptr<cudf::table> collect_tables(cudf::table_view table, Communicator
   if (mpi_rank == 0) {
     for (int icol = 0; icol < ncols; icol++) {
       merged_columns.push_back(
-        std::move(cudf::make_numeric_column(table.column(icol).type(), table_nrows_scan.back())));
+        cudf::make_fixed_width_column(table.column(icol).type(), table_nrows_scan.back()));
     }
 
     CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));

@@ -174,7 +174,9 @@ struct compression_functor {
    * need to be preallocated.
    * @param[out] compressed_size Number of bytes of *compressed_data*.
    */
-  template <typename T>
+  template <typename T,
+            std::enable_if_t<not cudf::is_timestamp_t<T>::value and
+                             not cudf::is_duration_t<T>::value> * = nullptr>
   void operator()(const void *uncompressed_data,
                   size_t uncompressed_count,
                   rmm::device_buffer &compressed_data,
@@ -195,6 +197,19 @@ struct compression_functor {
       temp_space.data(), temp_size, compressed_data.data(), &compressed_size, cudaStreamDefault);
     CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
   }
+
+  template <
+    typename T,
+    std::enable_if_t<cudf::is_timestamp_t<T>::value or cudf::is_duration_t<T>::value> * = nullptr>
+  void operator()(const void *uncompressed_data,
+                  size_t uncompressed_count,
+                  rmm::device_buffer &compressed_data,
+                  size_t &compressed_size)
+  {
+    // If the data type is duration or time, use the corresponding arithmetic type
+    operator()<typename T::rep>(
+      uncompressed_data, uncompressed_count, compressed_data, compressed_size);
+  }
 };
 
 struct decompressor_functor {
@@ -207,7 +222,9 @@ struct decompressor_functor {
    * @param[out] expected_output_count Expected number of elements in the decompressed buffer. This
    * argument is only used for error checking purposes.
    */
-  template <typename T>
+  template <typename T,
+            std::enable_if_t<not cudf::is_timestamp_t<T>::value and
+                             not cudf::is_duration_t<T>::value> * = nullptr>
   void operator()(const void *compressed_data,
                   size_t compressed_size,
                   void *output,
@@ -223,6 +240,18 @@ struct decompressor_functor {
     decompressor.decompress_async(
       temp_space.data(), temp_size, static_cast<T *>(output), output_count, cudaStreamDefault);
     CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
+  }
+
+  template <
+    typename T,
+    std::enable_if_t<cudf::is_timestamp_t<T>::value or cudf::is_duration_t<T>::value> * = nullptr>
+  void operator()(const void *compressed_data,
+                  size_t compressed_size,
+                  void *output,
+                  size_t expected_output_count)
+  {
+    // If the data type is duration or time, use the corresponding arithmetic type
+    operator()<typename T::rep>(compressed_data, compressed_size, output, expected_output_count);
   }
 };
 
@@ -552,14 +581,14 @@ std::unique_ptr<table> distributed_inner_join(
   for (int ibatch = 0; ibatch < over_decom_factor; ibatch++) {
     vector<std::unique_ptr<column>> communicated_left_columns;
     for (cudf::size_type icol = 0; icol < hashed_left->num_columns(); icol++) {
-      communicated_left_columns.push_back(cudf::make_numeric_column(
+      communicated_left_columns.push_back(cudf::make_fixed_width_column(
         hashed_left->view().column(icol).type(), recv_offsets_left[ibatch].back()));
     }
     communicated_left[ibatch] = std::make_unique<table>(std::move(communicated_left_columns));
 
     vector<std::unique_ptr<column>> communicated_right_columns;
     for (cudf::size_type icol = 0; icol < hashed_right->num_columns(); icol++) {
-      communicated_right_columns.push_back(cudf::make_numeric_column(
+      communicated_right_columns.push_back(cudf::make_fixed_width_column(
         hashed_right->view().column(icol).type(), recv_offsets_right[ibatch].back()));
     }
     communicated_right[ibatch] = std::make_unique<table>(std::move(communicated_right_columns));
