@@ -222,7 +222,6 @@ int main(int argc, char *argv[])
   run_test<int32_t, int32_t>(1'000'000, 5'000'000, 0.3, true, 1, true, communicator);
   run_test<int64_t, int64_t>(1'000'000, 5'000'000, 0.3, true, 1, false, communicator);
   run_test<int64_t, int64_t>(1'000'000, 5'000'000, 0.3, true, 1, true, communicator);
-  /*
   run_test<int64_t, cudf::timestamp_D>(1'000'000, 1'000'000, 0.3, true, 1, false, communicator);
   run_test<int64_t, cudf::timestamp_D>(1'000'000, 1'000'000, 0.3, true, 1, true, communicator);
   run_test<int64_t, cudf::timestamp_ms>(1'000'000, 1'000'000, 0.3, true, 1, false, communicator);
@@ -235,7 +234,6 @@ int main(int argc, char *argv[])
   run_test<int64_t, cudf::duration_s>(1'000'000, 1'000'000, 0.3, true, 1, true, communicator);
   run_test<int64_t, cudf::duration_us>(1'000'000, 1'000'000, 0.3, true, 1, false, communicator);
   run_test<int64_t, cudf::duration_us>(1'000'000, 1'000'000, 0.3, true, 1, true, communicator);
-  */
 
   /* Cleanup */
 
