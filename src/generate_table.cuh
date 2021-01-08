@@ -239,17 +239,23 @@ std::pair<std::unique_ptr<table>, std::unique_ptr<table>> generate_tables_distri
 
   if (communicator->group_by_batch()) communicator->start();
 
-  all_to_all_comm(pre_shuffle_build_table->view(),
-                  build_table->mutable_view(),
-                  build_table_offset,
-                  build_table_recv_offset,
-                  communicator);
+  std::vector<AllToAllCommBuffer> all_to_all_comm_buffers;
 
-  all_to_all_comm(pre_shuffle_probe_table->view(),
-                  probe_table->mutable_view(),
-                  probe_table_offset,
-                  probe_table_recv_offset,
-                  communicator);
+  preprocess_all_to_all_comm(pre_shuffle_build_table->view(),
+                             build_table->mutable_view(),
+                             build_table_offset,
+                             build_table_recv_offset,
+                             all_to_all_comm_buffers,
+                             false);
+
+  preprocess_all_to_all_comm(pre_shuffle_probe_table->view(),
+                             probe_table->mutable_view(),
+                             probe_table_offset,
+                             probe_table_recv_offset,
+                             all_to_all_comm_buffers,
+                             false);
+
+  all_to_all_comm(all_to_all_comm_buffers, communicator, true);
 
   if (communicator->group_by_batch()) communicator->stop();
 

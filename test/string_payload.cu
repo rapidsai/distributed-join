@@ -87,7 +87,7 @@ std::unique_ptr<cudf::table> generate_table(cudf::size_type nelements_per_gpu,
   return std::make_unique<cudf::table>(std::move(new_table));
 }
 
-void run_test(cudf::size_type nelements_per_gpu, Communicator *communicator)
+void run_test(cudf::size_type nelements_per_gpu, bool compression, Communicator *communicator)
 {
   int mpi_rank = communicator->mpi_rank;
   int mpi_size = communicator->mpi_size;
@@ -105,7 +105,7 @@ void run_test(cudf::size_type nelements_per_gpu, Communicator *communicator)
                                             {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
                                             communicator,
                                             1,
-                                            false);
+                                            compression);
 
   int num_rows = join_result->num_rows();
   int total_nrows;
@@ -147,7 +147,8 @@ int main(int argc, char *argv[])
 
   /* Run tests */
 
-  run_test(12'000, communicator);
+  run_test(12'000, true, communicator);
+  run_test(12'000, false, communicator);
 
   /* Cleanup */
 

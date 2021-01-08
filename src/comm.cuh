@@ -18,7 +18,6 @@
 #define __COMM_CUH
 
 #include <mpi.h>
-#include <cudf/types.hpp>
 #include <vector>
 
 #include "communicator.h"

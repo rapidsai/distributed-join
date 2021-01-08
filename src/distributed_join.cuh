@@ -63,6 +63,22 @@ using std::chrono::duration_cast;
 using std::chrono::high_resolution_clock;
 using std::chrono::milliseconds;
 
+enum class CompressionMethod { cascaded, lz4 };
+
+struct AllToAllCommBuffer {
+  const void *send_buffer;
+  void *recv_buffer;
+  std::vector<cudf::size_type> send_offsets;
+  std::vector<int64_t> recv_offsets;
+  cudf::data_type dtype;
+  bool compression;
+  CompressionMethod compression_method;
+  rmm::device_buffer compressed_send_buffer;
+  rmm::device_buffer compressed_recv_buffer;
+  std::vector<cudf::size_type> compressed_send_offsets;
+  std::vector<int64_t> compressed_recv_offsets;
+};
+
 /**
  * Communicate number of elements recieved from each rank during all-to-all communication.
  *
@@ -128,112 +144,6 @@ void communicate_sizes(vector<cudf::size_type> const &send_offset,
 {
   communicate_sizes(
     vector<int64_t>(send_offset.begin(), send_offset.end()), recv_offset, communicator);
-}
-
-/**
- * All-to-all communication of a single batch.
- *
- * Note: If the communicator supports grouping by batches, this call is nonblocking and should
- * be enclosed by `communicator->start()` and `communicator->stop()`.
- *
- * This function needs to be called collectively by all ranks in MPI_COMM_WORLD. For every ranks,
- * all arguments are significant.
- *
- * @param[in] input Table to be communicated.
- * @param[out] output Table after all-to-all communication. This argument needs to be preallocated.
- * @param[in] send_offset Vector of size `mpi_size + 1` such that `send_offset[i]` represents the
- * start index of `input` to be sent to rank `i`.
- * @param[in] recv_offset Vector of size `mpi_size + 1` such that `recv_offset[i]` represents the
- * start index of `output` to receive data from rank `i`.
- * @param[in] communicator An instance of `Communicator` used for communication.
- * @param[in] include_self If true, this function will send the partition destined to the current
- * rank.
- */
-void all_to_all_comm(cudf::table_view input,
-                     cudf::mutable_table_view output,
-                     vector<cudf::size_type> const &send_offset,
-                     vector<int64_t> const &recv_offset,
-                     Communicator *communicator,
-                     bool include_self = true)
-{
-  for (cudf::size_type icol = 0; icol < input.num_columns(); icol++) {
-    cudf::data_type dtype = input.column(icol).type();
-    assert(dtype.id() != cudf::type_id::STRING);
-
-    cudf::size_type dtype_size = cudf::size_of(dtype);
-    if (!communicator->group_by_batch()) communicator->start();
-
-    send_data_by_offset(
-      input.column(icol).head(), send_offset, dtype_size, communicator, include_self);
-
-    recv_data_by_offset(
-      output.column(icol).head(), recv_offset, dtype_size, communicator, include_self);
-
-    if (!communicator->group_by_batch()) communicator->stop();
-  }
-}
-
-void all_to_all_comm(cudf::table_view input,
-                     cudf::mutable_table_view output,
-                     vector<cudf::size_type> const &send_offset,
-                     vector<int64_t> const &recv_offset,
-                     vector<vector<cudf::size_type>> const &string_send_offsets,
-                     vector<vector<int64_t>> const &string_recv_offsets,
-                     vector<rmm::device_buffer> const &string_sizes_send,
-                     vector<rmm::device_buffer> &string_sizes_recv,
-                     Communicator *communicator,
-                     bool include_self = true)
-{
-  for (cudf::size_type icol = 0; icol < input.num_columns(); icol++) {
-    cudf::data_type dtype = input.column(icol).type();
-
-    if (dtype.id() != cudf::type_id::STRING) {
-      // This is a fixed-width column
-      cudf::size_type dtype_size = cudf::size_of(dtype);
-      if (!communicator->group_by_batch()) communicator->start();
-
-      send_data_by_offset(
-        input.column(icol).head(), send_offset, dtype_size, communicator, include_self);
-
-      recv_data_by_offset(
-        output.column(icol).head(), recv_offset, dtype_size, communicator, include_self);
-
-      if (!communicator->group_by_batch()) communicator->stop();
-    } else {
-      // This is a string column
-      if (!communicator->group_by_batch()) communicator->start();
-
-      send_data_by_offset(string_sizes_send[icol].data(),
-                          send_offset,
-                          sizeof(cudf::size_type),
-                          communicator,
-                          include_self);
-
-      recv_data_by_offset(string_sizes_recv[icol].data(),
-                          recv_offset,
-                          sizeof(cudf::size_type),
-                          communicator,
-                          include_self);
-
-      if (!communicator->group_by_batch()) communicator->stop();
-
-      if (!communicator->group_by_batch()) communicator->start();
-
-      send_data_by_offset(input.column(icol).child(1).head(),
-                          string_send_offsets[icol],
-                          1,
-                          communicator,
-                          include_self);
-
-      recv_data_by_offset(output.column(icol).child(1).head(),
-                          string_recv_offsets[icol],
-                          1,
-                          communicator,
-                          include_self);
-
-      if (!communicator->group_by_batch()) communicator->stop();
-    }
-  }
 }
 
 struct compression_functor {
@@ -327,158 +237,6 @@ struct decompressor_functor {
     operator()<typename T::rep>(compressed_data, compressed_size, output, expected_output_count);
   }
 };
-
-/**
- * All-to-all communication of a single batch, with data compression.
- *
- * After the all-to-all communication is completed, the data can be decompressed with
- * *all_to_all_comm_decompression*.
- *
- * Note: If the communicator supports grouping by batches, this call is nonblocking and should
- * be enclosed by `communicator->start()` and `communicator->stop()`.
- *
- * @param[in] input Table to be communicated.
- * @param[in] send_offset Vector of length mpi_size + 1 such that `send_offset[i+1] -
- * send_offset[i]` is the number of elements sent from the current rank to rank i during the
- * all-to-all communication.
- * @param[out] compressed_input Vector of length number of columns, where each element holds the
- * compressed data of a column to be sent to remote GPUs. This argument does not need to be
- * preallocated, but the user of this function needs to keep it alive until the communication is
- * finished.
- * @param[out] compressed_output Vector of length number of columns, where each element holds the
- * compressed data of a column received from each remote GPUs. This argument does not need to be
- * preallocated.
- * @param[out] compressed_recv_offset `compressed_recv_offset[i,j]` represents the start index of
- * compressed data in `compressed_output[i]` received from rank `j`.
- * @param[in] communicator An instance of `Communicator` used for communication.
- * @param[in] include_self If true, this function will send the partition destined to the current
- * rank.
- */
-void all_to_all_comm_with_compression(cudf::table_view input,
-                                      vector<cudf::size_type> const &send_offset,
-                                      vector<rmm::device_buffer> &compressed_input,
-                                      vector<rmm::device_buffer> &compressed_output,
-                                      vector<vector<int64_t>> &compressed_recv_offset,
-                                      Communicator *communicator,
-                                      bool include_self = true)
-{
-  cudf::size_type ncols = input.num_columns();
-  compressed_input.resize(ncols);
-  compressed_output.resize(ncols);
-  compressed_recv_offset.resize(ncols);
-
-  int mpi_rank = communicator->mpi_rank;
-  int mpi_size = communicator->mpi_size;
-
-  for (cudf::size_type icol = 0; icol < ncols; icol++) {
-    cudf::column_view column = input.column(icol);
-    cudf::data_type dtype    = column.type();
-    assert(dtype.id() != cudf::type_id::STRING);
-    cudf::size_type dtype_size = cudf::size_of(dtype);
-
-    vector<rmm::device_buffer> compressed_column(mpi_size);
-    vector<size_t> compressed_column_size(mpi_size, 0);
-
-    // compress each partition in the column separately and store the result in
-    // *compressed_column*
-    for (int irank = 0; irank < mpi_size; irank++) {
-      if (!include_self && irank == mpi_rank) continue;
-
-      cudf::type_dispatcher(
-        dtype,
-        compression_functor{},
-        static_cast<const void *>(column.head<char>() + send_offset[irank] * dtype_size),
-        send_offset[irank + 1] - send_offset[irank],
-        compressed_column[irank],
-        compressed_column_size[irank]);
-    }
-
-    // calculate and communicate offsets for compressed column
-    vector<int64_t> compressed_send_offset(mpi_size + 1);
-    compressed_send_offset[0] = 0;
-    for (int irank = 0; irank < mpi_size; irank++) {
-      compressed_send_offset[irank + 1] =
-        compressed_send_offset[irank] + compressed_column_size[irank];
-    }
-
-    communicate_sizes(compressed_send_offset, compressed_recv_offset[icol], communicator);
-
-    // merge compressed data of all partitions in *compressed_column* into a single buffer
-    compressed_input[icol] = rmm::device_buffer(compressed_send_offset.back());
-    for (int irank = 0; irank < mpi_size; irank++) {
-      if (!include_self && irank == mpi_rank) continue;
-
-      CUDA_RT_CALL(
-        cudaMemcpy((void *)((char *)compressed_input[icol].data() + compressed_send_offset[irank]),
-                   compressed_column[irank].data(),
-                   compressed_column_size[irank],
-                   cudaMemcpyDeviceToDevice));
-    }
-
-    compressed_column.clear();
-
-    // allocate receive buffer and launch all-to-all communication
-    compressed_output[icol] = rmm::device_buffer(compressed_recv_offset[icol].back());
-
-    if (!communicator->group_by_batch()) communicator->start();
-
-    send_data_by_offset(
-      compressed_input[icol].data(), compressed_send_offset, 1, communicator, include_self);
-
-    recv_data_by_offset(
-      compressed_output[icol].data(), compressed_recv_offset[icol], 1, communicator, include_self);
-
-    if (!communicator->group_by_batch()) communicator->stop();
-  }
-}
-
-/**
- * Decompress the data after receiving from remote GPUs.
- *
- * @param[out] output Decompressed table. This argument needs to be preallocated with number of
- * rows equal to the last element in `recv_offset`.
- * @param[in] recv_offset Vector of size `mpi_size + 1` such that `recv_offset[i]` represents the
- * start index of `output` to receive data from rank `i`.
- * @param[in] compressed_output Vector of length number of columns, where each element holds the
- * compressed data of a column received from each remote GPUs. This is the output of
- * *all_to_all_comm_with_compression*.
- * @param[in] compressed_recv_offset `compressed_recv_offset[i,j]` represents the start index of
- * compressed data in `compressed_output[i]` received from rank `j`. This is the output of
- * *all_to_all_comm_with_compression*.
- * @param[in] communicator An instance of `Communicator` used for communication.
- * @param[in] include_self This argument should be kept consistent with the argument used in
- * *all_to_all_comm_with_compression*.
- */
-void all_to_all_comm_decompression(cudf::mutable_table_view output,
-                                   vector<int64_t> const &recv_offset,
-                                   vector<rmm::device_buffer> const &compressed_output,
-                                   vector<vector<int64_t>> const &compressed_recv_offset,
-                                   Communicator *communicator,
-                                   bool include_self = true)
-{
-  int mpi_rank          = communicator->mpi_rank;
-  int mpi_size          = communicator->mpi_size;
-  cudf::size_type ncols = output.num_columns();
-
-  for (cudf::size_type icol = 0; icol < ncols; icol++) {
-    cudf::column_view column   = output.column(icol);
-    cudf::data_type dtype      = column.type();
-    cudf::size_type dtype_size = cudf::size_of(dtype);
-
-    for (int irank = 0; irank < mpi_size; irank++) {
-      if (!include_self && irank == mpi_rank) continue;
-
-      cudf::type_dispatcher(
-        dtype,
-        decompressor_functor{},
-        static_cast<const void *>(static_cast<const char *>(compressed_output[icol].data()) +
-                                  +compressed_recv_offset[icol][irank]),
-        compressed_recv_offset[icol][irank + 1] - compressed_recv_offset[icol][irank],
-        (void *)(column.head<char>() + recv_offset[irank] * dtype_size),
-        recv_offset[irank + 1] - recv_offset[irank]);
-    }
-  }
-}
 
 /**
  * Local join thread used for merging incoming partitions and performing local joins.
@@ -740,6 +498,194 @@ void copy_to_self(cudf::table_view input_table,
   }
 }
 
+void preprocess_all_to_all_comm(cudf::table_view input,
+                                cudf::mutable_table_view output,
+                                vector<cudf::size_type> const &send_offsets,
+                                vector<int64_t> const &recv_offsets,
+                                vector<vector<cudf::size_type>> const &string_send_offsets,
+                                vector<vector<int64_t>> const &string_recv_offsets,
+                                vector<rmm::device_buffer> const &string_sizes_send,
+                                vector<rmm::device_buffer> &string_sizes_recv,
+                                vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
+                                bool compression)
+{
+  for (cudf::size_type icol = 0; icol < input.num_columns(); icol++) {
+    cudf::data_type dtype = input.column(icol).type();
+    assert(dtype == output.column(icol).type());
+
+    if (dtype.id() != cudf::type_id::STRING) {
+      // This is a fixed-width column
+      all_to_all_comm_buffers.emplace_back();
+      AllToAllCommBuffer &buffer = all_to_all_comm_buffers.back();
+      buffer.send_buffer         = input.column(icol).head();
+      buffer.recv_buffer         = output.column(icol).head();
+      buffer.send_offsets        = send_offsets;
+      buffer.recv_offsets        = recv_offsets;
+      buffer.dtype               = dtype;
+      buffer.compression         = compression;
+      buffer.compression_method  = CompressionMethod::cascaded;
+    } else {
+      // This is a string column
+      all_to_all_comm_buffers.emplace_back();
+      AllToAllCommBuffer &offset_buffer = all_to_all_comm_buffers.back();
+      offset_buffer.send_buffer         = string_sizes_send[icol].data();
+      offset_buffer.recv_buffer         = string_sizes_recv[icol].data();
+      offset_buffer.send_offsets        = send_offsets;
+      offset_buffer.recv_offsets        = recv_offsets;
+      offset_buffer.dtype               = input.column(icol).child(0).type();
+      offset_buffer.compression         = compression;
+      offset_buffer.compression_method  = CompressionMethod::cascaded;
+
+      all_to_all_comm_buffers.emplace_back();
+      AllToAllCommBuffer &string_buffer = all_to_all_comm_buffers.back();
+      string_buffer.send_buffer         = input.column(icol).child(1).head();
+      string_buffer.recv_buffer         = output.column(icol).child(1).head();
+      string_buffer.send_offsets        = string_send_offsets[icol];
+      string_buffer.recv_offsets        = string_recv_offsets[icol];
+      string_buffer.dtype               = input.column(icol).child(1).type();
+      string_buffer.compression         = compression;
+      string_buffer.compression_method  = CompressionMethod::cascaded;
+    }
+  }
+}
+
+void preprocess_all_to_all_comm(cudf::table_view input,
+                                cudf::mutable_table_view output,
+                                vector<cudf::size_type> const &send_offsets,
+                                vector<int64_t> const &recv_offsets,
+                                vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
+                                bool compression)
+{
+  vector<rmm::device_buffer> string_sizes_recv;
+
+  preprocess_all_to_all_comm(input,
+                             output,
+                             send_offsets,
+                             recv_offsets,
+                             vector<vector<cudf::size_type>>(),
+                             vector<vector<int64_t>>(),
+                             vector<rmm::device_buffer>(),
+                             string_sizes_recv,
+                             all_to_all_comm_buffers,
+                             compression);
+}
+
+void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
+                     Communicator *communicator,
+                     bool include_self = true)
+{
+  int mpi_rank = communicator->mpi_rank;
+  int mpi_size = communicator->mpi_size;
+
+  for (auto &buffer : all_to_all_comm_buffers) {
+    if (!buffer.compression) {
+      if (!communicator->group_by_batch()) communicator->start();
+
+      send_data_by_offset(buffer.send_buffer,
+                          buffer.send_offsets,
+                          cudf::size_of(buffer.dtype),
+                          communicator,
+                          include_self);
+
+      recv_data_by_offset(buffer.recv_buffer,
+                          buffer.recv_offsets,
+                          cudf::size_of(buffer.dtype),
+                          communicator,
+                          include_self);
+
+      if (!communicator->group_by_batch()) communicator->stop();
+
+      continue;
+    }
+
+    // If the code reaches here, the buffer will be compressed before communication
+    assert(buffer.compression_method == CompressionMethod::cascaded);
+
+    // Compress each partition in the send buffer separately and store the result in
+    // `compressed_buffers`
+    vector<rmm::device_buffer> compressed_buffers(mpi_size);
+    vector<size_t> compressed_buffer_sizes(mpi_size, 0);
+
+    for (int irank = 0; irank < mpi_size; irank++) {
+      if (!include_self && irank == mpi_rank) continue;
+
+      cudf::type_dispatcher(
+        buffer.dtype,
+        compression_functor{},
+        ADV_PTR(buffer.send_buffer, buffer.send_offsets[irank] * cudf::size_of(buffer.dtype)),
+        buffer.send_offsets[irank + 1] - buffer.send_offsets[irank],
+        compressed_buffers[irank],
+        compressed_buffer_sizes[irank]);
+    }
+
+    // Calculate and communicate offsets for the compressed buffers
+    buffer.compressed_send_offsets.resize(mpi_size + 1);
+    buffer.compressed_send_offsets[0] = 0;
+    for (int irank = 0; irank < mpi_size; irank++) {
+      buffer.compressed_send_offsets[irank + 1] =
+        buffer.compressed_send_offsets[irank] + compressed_buffer_sizes[irank];
+    }
+
+    communicate_sizes(buffer.compressed_send_offsets, buffer.compressed_recv_offsets, communicator);
+
+    // Merge compressed data of all partitions in `compressed_buffers` into a single buffer
+    buffer.compressed_send_buffer.resize(buffer.compressed_send_offsets.back());
+    for (int irank = 0; irank < mpi_size; irank++) {
+      if (!include_self && irank == mpi_rank) continue;
+
+      CUDA_RT_CALL(cudaMemcpy(
+        ADV_PTR(buffer.compressed_send_buffer.data(), buffer.compressed_send_offsets[irank]),
+        compressed_buffers[irank].data(),
+        compressed_buffer_sizes[irank],
+        cudaMemcpyDeviceToDevice));
+    }
+    compressed_buffers.clear();
+
+    // Allocate receive buffer and launch all-to-all communication on the compressed buffer
+    buffer.compressed_recv_buffer.resize(buffer.compressed_recv_offsets.back());
+
+    if (!communicator->group_by_batch()) communicator->start();
+
+    send_data_by_offset(buffer.compressed_send_buffer.data(),
+                        buffer.compressed_send_offsets,
+                        1,
+                        communicator,
+                        include_self);
+
+    recv_data_by_offset(buffer.compressed_recv_buffer.data(),
+                        buffer.compressed_recv_offsets,
+                        1,
+                        communicator,
+                        include_self);
+
+    if (!communicator->group_by_batch()) communicator->stop();
+  }
+}
+
+void postprocess_all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
+                                 Communicator *communicator,
+                                 bool include_self = true)
+{
+  int mpi_rank = communicator->mpi_rank;
+  int mpi_size = communicator->mpi_size;
+
+  for (auto &buffer : all_to_all_comm_buffers) {
+    if (!buffer.compression) continue;
+
+    for (int irank = 0; irank < mpi_size; irank++) {
+      if (!include_self && irank == mpi_rank) continue;
+
+      cudf::type_dispatcher(
+        buffer.dtype,
+        decompressor_functor{},
+        ADV_PTR(buffer.compressed_recv_buffer.data(), buffer.compressed_recv_offsets[irank]),
+        buffer.compressed_recv_offsets[irank + 1] - buffer.compressed_recv_offsets[irank],
+        ADV_PTR(buffer.recv_buffer, buffer.recv_offsets[irank] * cudf::size_of(buffer.dtype)),
+        buffer.recv_offsets[irank + 1] - buffer.recv_offsets[irank]);
+    }
+  }
+}
+
 /**
  * Top level interface for distributed inner join.
  *
@@ -969,85 +915,44 @@ std::unique_ptr<table> distributed_inner_join(
   for (int ibatch = 0; ibatch < over_decom_factor; ibatch++) {
     if (report_timing) { start_time = high_resolution_clock::now(); }
 
+    vector<AllToAllCommBuffer> all_to_all_comm_buffers;
+
     // the start and end index for left_offset and right_offset for the ibatch
     size_t start_idx = ibatch * mpi_size;
     size_t end_idx   = (ibatch + 1) * mpi_size + 1;
 
-    // temporary buffers for holding compressed data, if needed
-    vector<rmm::device_buffer> compressed_input_left;
-    vector<rmm::device_buffer> compressed_input_right;
-    vector<rmm::device_buffer> compressed_output_left;
-    vector<rmm::device_buffer> compressed_output_right;
-    vector<vector<int64_t>> compressed_recv_offset_left;
-    vector<vector<int64_t>> compressed_recv_offset_right;
+    preprocess_all_to_all_comm(
+      hashed_left->view(),
+      communicated_left[ibatch]->mutable_view(),
+      vector<cudf::size_type>(&left_offset[start_idx], &left_offset[end_idx]),
+      recv_offsets_left[ibatch],
+      string_send_offsets_left[ibatch],
+      string_recv_offsets_left[ibatch],
+      string_sizes_send_left,
+      string_sizes_recv_left[ibatch],
+      all_to_all_comm_buffers,
+      compression);
+
+    preprocess_all_to_all_comm(
+      hashed_right->view(),
+      communicated_right[ibatch]->mutable_view(),
+      vector<cudf::size_type>(&right_offset[start_idx], &right_offset[end_idx]),
+      recv_offsets_right[ibatch],
+      string_send_offsets_right[ibatch],
+      string_recv_offsets_right[ibatch],
+      string_sizes_send_right,
+      string_sizes_recv_right[ibatch],
+      all_to_all_comm_buffers,
+      compression);
 
     // all-to-all communication for the ibatch
     if (communicator->group_by_batch()) communicator->start();
 
-    if (compression) {
-      all_to_all_comm_with_compression(
-        hashed_left->view(),
-        vector<cudf::size_type>(&left_offset[start_idx], &left_offset[end_idx]),
-        compressed_input_left,
-        compressed_output_left,
-        compressed_recv_offset_left,
-        communicator,
-        false);
-
-      all_to_all_comm_with_compression(
-        hashed_right->view(),
-        vector<cudf::size_type>(&right_offset[start_idx], &right_offset[end_idx]),
-        compressed_input_right,
-        compressed_output_right,
-        compressed_recv_offset_right,
-        communicator,
-        false);
-    } else {
-      all_to_all_comm(hashed_left->view(),
-                      communicated_left[ibatch]->mutable_view(),
-                      vector<cudf::size_type>(&left_offset[start_idx], &left_offset[end_idx]),
-                      recv_offsets_left[ibatch],
-                      string_send_offsets_left[ibatch],
-                      string_recv_offsets_left[ibatch],
-                      string_sizes_send_left,
-                      string_sizes_recv_left[ibatch],
-                      communicator,
-                      false);
-
-      all_to_all_comm(hashed_right->view(),
-                      communicated_right[ibatch]->mutable_view(),
-                      vector<cudf::size_type>(&right_offset[start_idx], &right_offset[end_idx]),
-                      recv_offsets_right[ibatch],
-                      string_send_offsets_right[ibatch],
-                      string_recv_offsets_right[ibatch],
-                      string_sizes_send_right,
-                      string_sizes_recv_right[ibatch],
-                      communicator,
-                      false);
-    }
+    all_to_all_comm(all_to_all_comm_buffers, communicator, false);
 
     if (communicator->group_by_batch()) communicator->stop();
 
-    // compressed columns are not needed after all-to-all communication completes
-    compressed_input_left.clear();
-    compressed_input_right.clear();
-
-    // decompress the received data, if needed
-    if (compression) {
-      all_to_all_comm_decompression(communicated_left[ibatch]->mutable_view(),
-                                    recv_offsets_left[ibatch],
-                                    compressed_output_left,
-                                    compressed_recv_offset_left,
-                                    communicator,
-                                    false);
-
-      all_to_all_comm_decompression(communicated_right[ibatch]->mutable_view(),
-                                    recv_offsets_right[ibatch],
-                                    compressed_output_right,
-                                    compressed_recv_offset_right,
-                                    communicator,
-                                    false);
-    }
+    postprocess_all_to_all_comm(all_to_all_comm_buffers, communicator, false);
 
     calculate_string_offsets_from_sizes(communicated_left[ibatch]->mutable_view(),
                                         string_sizes_recv_left[ibatch]);
