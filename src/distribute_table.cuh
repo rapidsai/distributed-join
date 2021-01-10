@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef __DISTRIBUTE_TABLE
-#define __DISTRIBUTE_TABLE
+#pragma once
 
 #include <memory>
 #include <vector>
@@ -262,5 +261,3 @@ std::unique_ptr<cudf::table> collect_tables(cudf::table_view table, Communicator
     return std::unique_ptr<cudf::table>(nullptr);
   }
 }
-
-#endif

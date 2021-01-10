@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef __COMM_CUH
-#define __COMM_CUH
+#pragma once
 
 #include <mpi.h>
 #include <vector>
@@ -137,5 +136,3 @@ void recv_data_by_offset(void *data,
                        isource_rank);
   }
 }
-
-#endif  // __COMM_CUH

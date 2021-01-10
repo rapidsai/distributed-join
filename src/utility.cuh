@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#pragma once
+
 template <typename T = char>
 inline void *ADV_PTR(void *ptr, size_t offset)
 {

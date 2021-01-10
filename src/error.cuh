@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef __ERROR_CUH
-#define __ERROR_CUH
+#pragma once
 
 #include <cstdio>
 #include <cstdlib>
@@ -98,5 +97,3 @@
       exit(1);                                                                       \
     }                                                                                \
   }
-
-#endif  // __ERROR_CUH

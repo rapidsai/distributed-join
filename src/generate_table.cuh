@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef __GENERATE_TABLE_CUH
-#define __GENERATE_TABLE_CUH
+#pragma once
 
 #include <memory>
 #include <stdexcept>
@@ -261,5 +260,3 @@ std::pair<std::unique_ptr<table>, std::unique_ptr<table>> generate_tables_distri
 
   return std::make_pair(std::move(build_table), std::move(probe_table));
 }
-
-#endif  // __GENERATE_TABLE_CUH
