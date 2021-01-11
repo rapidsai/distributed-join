@@ -308,7 +308,7 @@ void inner_join_func(vector<std::unique_ptr<table>> &communicated_left,
     if (report_timing) {
       stop_time     = high_resolution_clock::now();
       auto duration = duration_cast<milliseconds>(stop_time - start_time);
-      std::cerr << "Rank " << communicator->mpi_rank << ": Local join on batch " << ibatch
+      std::cout << "Rank " << communicator->mpi_rank << ": Local join on batch " << ibatch
                 << " takes " << duration.count() << "ms" << std::endl;
     }
   }
@@ -883,7 +883,7 @@ std::unique_ptr<table> distributed_inner_join(
   if (report_timing) {
     stop_time     = high_resolution_clock::now();
     auto duration = duration_cast<milliseconds>(stop_time - start_time);
-    std::cerr << "Rank " << mpi_rank << ": Hash partition takes " << duration.count() << "ms"
+    std::cout << "Rank " << mpi_rank << ": Hash partition takes " << duration.count() << "ms"
               << std::endl;
   }
 
@@ -1091,7 +1091,7 @@ std::unique_ptr<table> distributed_inner_join(
     if (report_timing) {
       stop_time     = high_resolution_clock::now();
       auto duration = duration_cast<milliseconds>(stop_time - start_time);
-      std::cerr << "Rank " << mpi_rank << ": All-to-all communication on batch " << ibatch
+      std::cout << "Rank " << mpi_rank << ": All-to-all communication on batch " << ibatch
                 << " takes " << duration.count() << "ms" << std::endl;
     }
   }
