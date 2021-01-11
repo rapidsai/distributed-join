@@ -31,6 +31,7 @@ UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc mpirun -n 4 --cpus-per-rank 2 
 --data-folder <path-to-data-folder> --orders 0,1,2 --lineitem 0,1,2,3 --compression
 */
 
+#include "../src/comm.cuh"
 #include "../src/distributed_join.cuh"
 #include "../src/topology.cuh"
 
@@ -176,6 +177,14 @@ int main(int argc, char *argv[])
 
   MPI_CALL(
     MPI_Allreduce(&input_size_irank, &input_size_total, 1, MPI_INT64_T, MPI_SUM, MPI_COMM_WORLD));
+
+  // Warmup all-to-all
+
+  warmup_all_to_all(communicator);
+
+  // Warmup nvcomp
+
+  if (compression) { warmup_nvcomp(); }
 
   // Perform distributed join
 

@@ -16,11 +16,16 @@
 
 #pragma once
 
-#include <mpi.h>
-#include <vector>
-
 #include "communicator.h"
 #include "error.cuh"
+
+#include <rmm/cuda_stream_view.hpp>
+#include <rmm/mr/device/device_memory_resource.hpp>
+#include <rmm/mr/device/per_device_resource.hpp>
+
+#include <mpi.h>
+
+#include <vector>
 
 enum COMM_TAGS { placeholder_tag, exchange_size_tag };
 
@@ -135,4 +140,48 @@ void recv_data_by_offset(void *data,
                        item_size,
                        isource_rank);
   }
+}
+
+void warmup_all_to_all(Communicator *communicator)
+{
+  int mpi_rank                        = communicator->mpi_rank;
+  int mpi_size                        = communicator->mpi_size;
+  int64_t size                        = 10'000'000LL;
+  rmm::mr::device_memory_resource *mr = rmm::mr::get_current_device_resource();
+
+  /* Allocate send/recv buffers */
+
+  std::vector<void *> send_buffer(mpi_size, nullptr);
+  std::vector<void *> recv_buffer(mpi_size, nullptr);
+
+  for (int irank = 0; irank < mpi_size; irank++) {
+    if (irank == mpi_rank) continue;
+    send_buffer[irank] = mr->allocate(size / mpi_size, rmm::cuda_stream_default);
+    recv_buffer[irank] = mr->allocate(size / mpi_size, rmm::cuda_stream_default);
+  }
+
+  CUDA_RT_CALL(cudaStreamSynchronize(0));
+
+  /* Communication */
+
+  communicator->start();
+
+  for (int irank = 0; irank < mpi_size; irank++) {
+    if (irank != mpi_rank) communicator->send(send_buffer[irank], size / mpi_size, 1, irank);
+  }
+
+  for (int irank = 0; irank < mpi_size; irank++) {
+    if (irank != mpi_rank) communicator->recv(recv_buffer[irank], size / mpi_size, 1, irank);
+  }
+
+  communicator->stop();
+
+  /* Deallocate send/recv buffers */
+
+  for (int irank = 0; irank < mpi_rank; irank++) {
+    mr->deallocate(send_buffer[irank], size / mpi_size, rmm::cuda_stream_default);
+    mr->deallocate(recv_buffer[irank], size / mpi_size, rmm::cuda_stream_default);
+  }
+
+  CUDA_RT_CALL(cudaStreamSynchronize(0));
 }
