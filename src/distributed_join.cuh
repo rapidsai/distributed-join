@@ -717,6 +717,14 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
     // If the code reaches here, the buffer will be compressed before communication
     assert(buffer.compression_method == CompressionMethod::cascaded);
 
+    // General strategy of all-to-all with compression:
+    // The all-to-all interface works on a single buffer with offsets. Since we don't know the
+    // compressed size without actually doing the compression, we cannot pre-allocate this buffer
+    // beforehand. Instead we compress each partition in the send buffer separately. Once the
+    // compression is done, we can allocate the compressed send buffer and copy the compressed data
+    // into the buffer. The all-to-all communication can reuse the `send_data_by_offset` and
+    // `recv_data_by_offset` functions.
+
     // Compress each partition in the send buffer separately and store the result in
     // `compressed_buffers`
     vector<rmm::device_buffer> compressed_buffers(mpi_size);
