@@ -174,6 +174,7 @@ int main(int argc, char *argv[])
 
   run_test(30'000, 1, false, communicator);
   run_test(300'000, 1, false, communicator);
+  run_test(300'000, 1, true, communicator);
   run_test(300'000, 4, false, communicator);
   run_test(300'000, 4, true, communicator);
 

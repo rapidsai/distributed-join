@@ -179,6 +179,11 @@ struct compression_functor {
                   rmm::device_buffer &compressed_data,
                   size_t &compressed_size)
   {
+    if (uncompressed_count == 0) {
+      compressed_size = 0;
+      return;
+    }
+
     nvcomp::CascadedCompressor<T> compressor(
       static_cast<const T *>(uncompressed_data), uncompressed_count, 1, 1, true);
 
@@ -216,8 +221,7 @@ struct decompressor_functor {
    * @param[in] compressed_data Input data to be decompressed.
    * @param[in] compressed_size Size of *compressed_data* in bytes.
    * @param[out] output Decompressed output. This argument needs to be preallocated.
-   * @param[out] expected_output_count Expected number of elements in the decompressed buffer.
-   * This argument is only used for error checking purposes.
+   * @param[in] expected_output_count Expected number of elements in the decompressed buffer.
    */
   template <typename T,
             std::enable_if_t<not cudf::is_timestamp_t<T>::value and
@@ -227,6 +231,8 @@ struct decompressor_functor {
                   void *output,
                   size_t expected_output_count)
   {
+    if (expected_output_count == 0) return;
+
     nvcomp::Decompressor<T> decompressor(compressed_data, compressed_size, cudaStreamDefault);
     const size_t output_count = decompressor.get_num_elements();
     assert(output_count == expected_output_count);
@@ -295,7 +301,7 @@ void inner_join_func(vector<std::unique_ptr<table>> &communicated_left,
 
     if (communicated_left[ibatch]->num_rows() && communicated_right[ibatch]->num_rows()) {
       // Perform local join only when both left and right tables are not empty.
-      // If either is empty, the local join will return the other table, which is not desired.
+      // If either is empty, cuDF's inner join will return the other table, which is not desired.
       batch_join_results[ibatch] = cudf::inner_join(communicated_left[ibatch]->view(),
                                                     communicated_right[ibatch]->view(),
                                                     left_on,
