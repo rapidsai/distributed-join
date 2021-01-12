@@ -80,6 +80,8 @@ void run_test(cudf::size_type size,  // must be a multiple of 5
               bool compression,
               Communicator *communicator)
 {
+  assert(size % 5 == 0);
+
   int mpi_rank;
   MPI_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank));
 

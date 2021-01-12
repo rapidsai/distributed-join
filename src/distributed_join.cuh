@@ -167,6 +167,8 @@ struct compression_functor {
   /**
    * Compress a buffer using cascaded compression.
    *
+   * This functor is performed on the default stream and is synchronous to the host thread.
+   *
    * @param[in] uncompressed_data Input buffer to be compressed.
    * @param[in] uncompressed_count Number of elements to be compressed. Note that in general this
    * is different from the size of the buffer.
@@ -192,14 +194,16 @@ struct compression_functor {
     CUDA_RT_CALL(cudaMemset(compressed_data.data(), 0, compressed_size));
 
     compressor.compress_async(
-      temp_space.data(), temp_size, compressed_data.data(), &compressed_size, cudaStreamDefault);
-    CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
+      temp_space.data(), temp_size, compressed_data.data(), &compressed_size, 0);
+    CUDA_RT_CALL(cudaStreamSynchronize(0));
   }
 };
 
 struct decompressor_functor {
   /**
    * Decompress a buffer previously compressed by `compression_functor{}.operator()`.
+   *
+   * This functor is performed on the default stream and is synchronous to the host thread.
    *
    * @param[in] compressed_data Input data to be decompressed.
    * @param[in] compressed_size Size of *compressed_data* in bytes.
@@ -213,7 +217,7 @@ struct decompressor_functor {
                   void *output,
                   size_t expected_output_count)
   {
-    nvcomp::Decompressor<T> decompressor(compressed_data, compressed_size, cudaStreamDefault);
+    nvcomp::Decompressor<T> decompressor(compressed_data, compressed_size, 0);
     const size_t output_count = decompressor.get_num_elements();
     assert(output_count == expected_output_count);
 
@@ -221,8 +225,8 @@ struct decompressor_functor {
     rmm::device_buffer temp_space(temp_size);
 
     decompressor.decompress_async(
-      temp_space.data(), temp_size, static_cast<T *>(output), output_count, cudaStreamDefault);
-    CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
+      temp_space.data(), temp_size, static_cast<T *>(output), output_count, 0);
+    CUDA_RT_CALL(cudaStreamSynchronize(0));
   }
 };
 
@@ -565,7 +569,7 @@ std::unique_ptr<table> distributed_inner_join(
     communicated_right[ibatch] = std::make_unique<table>(std::move(communicated_right_columns));
   }
 
-  CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
+  CUDA_RT_CALL(cudaStreamSynchronize(0));
 
   // *flags* indicates whether each batch has finished communication
   // *flags* uses std::atomic because unsynchronized access to an object which is modified in one
