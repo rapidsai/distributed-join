@@ -688,10 +688,17 @@ void preprocess_all_to_all_comm(cudf::table_view input,
  */
 void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
                      Communicator *communicator,
-                     bool include_self = true)
+                     bool include_self  = true,
+                     bool report_timing = false)
 {
   int mpi_rank = communicator->mpi_rank;
   int mpi_size = communicator->mpi_size;
+
+  double start_time;
+  double stop_time;
+  double total_compression_time  = 0.0;
+  double total_uncompressed_size = 0.0;
+  double total_compressed_size   = 0.0;
 
   for (auto &buffer : all_to_all_comm_buffers) {
     if (!buffer.compression) {
@@ -725,6 +732,8 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
     // into the buffer. The all-to-all communication can reuse the `send_data_by_offset` and
     // `recv_data_by_offset` functions.
 
+    if (report_timing) { start_time = MPI_Wtime(); }
+
     // Compress each partition in the send buffer separately and store the result in
     // `compressed_buffers`
     vector<rmm::device_buffer> compressed_buffers(mpi_size);
@@ -748,6 +757,13 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
     for (int irank = 0; irank < mpi_size; irank++) {
       buffer.compressed_send_offsets[irank + 1] =
         buffer.compressed_send_offsets[irank] + compressed_buffer_sizes[irank];
+    }
+
+    if (report_timing) {
+      stop_time = MPI_Wtime();
+      total_compression_time += (stop_time - start_time);
+      total_uncompressed_size += (buffer.send_offsets.back() * cudf::size_of(buffer.dtype));
+      total_compressed_size += buffer.compressed_send_offsets.back();
     }
 
     communicate_sizes(buffer.compressed_send_offsets, buffer.compressed_recv_offsets, communicator);
@@ -784,6 +800,14 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
 
     if (!communicator->group_by_batch()) communicator->stop();
   }
+
+  if (report_timing) {
+    std::cout << "Rank " << mpi_rank << ": compression takes " << total_compression_time * 1e3
+              << "ms"
+              << " with compression ratio " << total_uncompressed_size / total_compressed_size
+              << " and throughput " << total_uncompressed_size / total_compression_time / 1e9
+              << "GB/s" << std::endl;
+  }
 }
 
 /**
@@ -793,10 +817,16 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
  */
 void postprocess_all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
                                  Communicator *communicator,
-                                 bool include_self = true)
+                                 bool include_self  = true,
+                                 bool report_timing = false)
 {
   int mpi_rank = communicator->mpi_rank;
   int mpi_size = communicator->mpi_size;
+  double start_time;
+  double stop_time;
+  double total_uncompressed_size = 0.0;
+
+  if (report_timing) { start_time = MPI_Wtime(); }
 
   // Decompress compressed data into destination buffer
   for (auto &buffer : all_to_all_comm_buffers) {
@@ -813,6 +843,17 @@ void postprocess_all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buf
         ADV_PTR(buffer.recv_buffer, buffer.recv_offsets[irank] * cudf::size_of(buffer.dtype)),
         buffer.recv_offsets[irank + 1] - buffer.recv_offsets[irank]);
     }
+
+    if (report_timing)
+      total_uncompressed_size += (buffer.recv_offsets.back() * cudf::size_of(buffer.dtype));
+  }
+
+  if (report_timing) {
+    stop_time       = MPI_Wtime();
+    double duration = stop_time - start_time;
+    std::cout << "Rank " << mpi_rank << ": decompression takes " << duration * 1e3 << "ms"
+              << " with throughput " << total_uncompressed_size / duration / 1e9 << "GB/s"
+              << std::endl;
   }
 }
 
@@ -1087,11 +1128,11 @@ std::unique_ptr<table> distributed_inner_join(
     // all-to-all communication for the ibatch
     if (communicator->group_by_batch()) communicator->start();
 
-    all_to_all_comm(all_to_all_comm_buffers, communicator, false);
+    all_to_all_comm(all_to_all_comm_buffers, communicator, false, report_timing);
 
     if (communicator->group_by_batch()) communicator->stop();
 
-    postprocess_all_to_all_comm(all_to_all_comm_buffers, communicator, false);
+    postprocess_all_to_all_comm(all_to_all_comm_buffers, communicator, false, report_timing);
 
     calculate_string_offsets_from_sizes(communicated_left[ibatch]->mutable_view(),
                                         string_sizes_recv_left[ibatch]);
