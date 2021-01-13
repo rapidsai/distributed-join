@@ -14,6 +14,21 @@
  * limitations under the License.
  */
 
+/*
+This test case compares the result of distributed join on multiple GPUs to the result of
+cudf::inner_join on a single GPU.
+
+Specifically, it follows the following steps:
+1. The root rank constructs a random build table and a random probe table.
+2. The root rank runs cudf::inner_join on the newly constructed tables.
+3. The root rank distributes the build and probe table across all ranks.
+4. All ranks run distibuted join collectively.
+5. Each rank sends the distributed join result to the root rank.
+6. The root rank assembles the received results into a single table and compares it to the result of
+step 2.
+*/
+
+#include <cstdint>
 #include <iostream>
 #include <memory>
 #include <tuple>
@@ -37,32 +52,6 @@
 
 using cudf::table;
 
-#define KEY_T int
-#define PAYLOAD_T int
-
-static cudf::size_type BUILD_TABLE_SIZE = 1'000'000;
-static cudf::size_type PROBE_TABLE_SIZE = 5'000'000;
-static double SELECTIVITY               = 0.3;
-static bool IS_BUILD_TABLE_KEY_UNIQUE   = true;
-static int OVER_DECOMPOSITION_FACTOR    = 10;
-
-void parse_command_line_arguments(int argc, char *argv[])
-{
-  for (int iarg = 0; iarg < argc; iarg++) {
-    if (!strcmp(argv[iarg], "--build-table-nrows")) { BUILD_TABLE_SIZE = atoi(argv[iarg + 1]); }
-
-    if (!strcmp(argv[iarg], "--probe-table-nrows")) { PROBE_TABLE_SIZE = atoi(argv[iarg + 1]); }
-
-    if (!strcmp(argv[iarg], "--selectivity")) { SELECTIVITY = atof(argv[iarg + 1]); }
-
-    if (!strcmp(argv[iarg], "--duplicate-build-keys")) { IS_BUILD_TABLE_KEY_UNIQUE = false; }
-
-    if (!strcmp(argv[iarg], "--over-decomposition-factor")) {
-      OVER_DECOMPOSITION_FACTOR = atoi(argv[iarg + 1]);
-    }
-  }
-}
-
 template <typename data_type>
 __global__ void verify_correctness(const data_type *data1,
                                    const data_type *data2,
@@ -76,35 +65,19 @@ __global__ void verify_correctness(const data_type *data1,
   }
 }
 
-int main(int argc, char *argv[])
+template <typename KEY_T, typename PAYLOAD_T>
+void run_test(cudf::size_type build_table_size,
+              cudf::size_type probe_table_size,
+              double selectivity,
+              bool is_build_table_key_unique,
+              int over_decomposition_factor,
+              bool compression,
+              Communicator *communicator)
 {
-  /* Initialize topology */
-
-  setup_topology(argc, argv);
-
-  /* Parse command line arguments */
-
-  parse_command_line_arguments(argc, argv);
-
-  /* Initialize communicator */
-
   int mpi_rank;
   int mpi_size;
   MPI_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank));
   MPI_CALL(MPI_Comm_size(MPI_COMM_WORLD, &mpi_size));
-
-  UCXCommunicator *communicator = initialize_ucx_communicator(false, 0, 0);
-
-  /* Initialize memory pool */
-
-  size_t free_memory, total_memory;
-  CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
-  const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
-
-  registered_memory_resource mr(communicator);
-  auto *pool_mr =
-    new rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource>(&mr, pool_size, pool_size);
-  rmm::mr::set_current_device_resource(pool_mr);
 
   /* Generate build table and probe table and compute reference solution */
 
@@ -116,10 +89,10 @@ int main(int argc, char *argv[])
   cudf::table_view probe_view;
 
   if (mpi_rank == 0) {
-    KEY_T RAND_MAX_VAL = BUILD_TABLE_SIZE * 2;
+    KEY_T rand_max_val = build_table_size * 2;
 
     std::tie(build, probe) = generate_build_probe_tables<KEY_T, PAYLOAD_T>(
-      BUILD_TABLE_SIZE, PROBE_TABLE_SIZE, SELECTIVITY, RAND_MAX_VAL, IS_BUILD_TABLE_KEY_UNIQUE);
+      build_table_size, probe_table_size, selectivity, rand_max_val, is_build_table_key_unique);
 
     build_view = build->view();
     probe_view = probe->view();
@@ -140,7 +113,8 @@ int main(int argc, char *argv[])
                            {0},
                            {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
                            communicator,
-                           OVER_DECOMPOSITION_FACTOR);
+                           over_decomposition_factor,
+                           compression);
 
   /* Send join result from all ranks to the root rank */
 
@@ -187,24 +161,58 @@ int main(int argc, char *argv[])
     }
 
     CUDA_RT_CALL(cudaDeviceSynchronize());
+
+    std::cerr << "Test case (" << build_table_size << "," << probe_table_size << "," << selectivity
+              << "," << is_build_table_key_unique << "," << over_decomposition_factor << ","
+              << compression << ") passes successfully.\n";
   }
+}
+
+int main(int argc, char *argv[])
+{
+  /* Initialize topology */
+
+  setup_topology(argc, argv);
+
+  /* Initialize communicator */
+
+  UCXCommunicator *communicator = initialize_ucx_communicator(false, 0, 0);
+
+  /* Initialize memory pool */
+
+  size_t free_memory, total_memory;
+  CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
+  const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
+
+  registered_memory_resource mr(communicator);
+  auto *pool_mr =
+    new rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource>(&mr, pool_size, pool_size);
+  rmm::mr::set_current_device_resource(pool_mr);
+
+  /* run test */
+
+  run_test<int32_t, int32_t>(1'000'000, 5'000'000, 0.3, true, 10, false, communicator);
+  run_test<int32_t, int32_t>(1'000'000, 5'000'000, 0.3, true, 10, true, communicator);
+  run_test<int64_t, int64_t>(1'000'000, 5'000'000, 0.3, true, 10, false, communicator);
+  run_test<int64_t, int64_t>(1'000'000, 5'000'000, 0.3, true, 10, true, communicator);
+  run_test<int32_t, int32_t>(1'000'000, 5'000'000, 1.0, true, 10, false, communicator);
+  run_test<int32_t, int32_t>(1'000'000, 5'000'000, 1.0, true, 10, true, communicator);
+  run_test<int64_t, int64_t>(1'000'000, 5'000'000, 1.0, true, 10, false, communicator);
+  run_test<int64_t, int64_t>(1'000'000, 5'000'000, 1.0, true, 10, true, communicator);
+  run_test<int32_t, int32_t>(1'000'000, 1'000'000, 0.3, true, 10, false, communicator);
+  run_test<int32_t, int32_t>(1'000'000, 1'000'000, 0.3, true, 10, true, communicator);
+  run_test<int64_t, int64_t>(1'000'000, 1'000'000, 0.3, true, 10, false, communicator);
+  run_test<int64_t, int64_t>(1'000'000, 1'000'000, 0.3, true, 10, true, communicator);
+  run_test<int32_t, int32_t>(1'000'000, 5'000'000, 0.3, true, 1, false, communicator);
+  run_test<int32_t, int32_t>(1'000'000, 5'000'000, 0.3, true, 1, true, communicator);
+  run_test<int64_t, int64_t>(1'000'000, 5'000'000, 0.3, true, 1, false, communicator);
+  run_test<int64_t, int64_t>(1'000'000, 5'000'000, 0.3, true, 1, true, communicator);
 
   /* Cleanup */
-
-  build.reset();
-  probe.reset();
-  reference.reset();
-  local_build.reset();
-  local_probe.reset();
-  join_result_all_ranks.reset();
-  join_result.reset();
-  CUDA_RT_CALL(cudaDeviceSynchronize());
 
   delete pool_mr;
   communicator->finalize();
   delete communicator;
-
-  if (mpi_rank == 0) { std::cerr << "Test case \"compare_against_shared\" passes successfully.\n"; }
 
   return 0;
 }

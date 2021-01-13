@@ -72,8 +72,8 @@ void distribute_cols(cudf::column_view global_col,
 {
   /* Get MPI information */
 
-  int mpi_rank{communicator->mpi_rank};
-  int mpi_size{communicator->mpi_size};
+  int mpi_rank = communicator->mpi_rank;
+  int mpi_size = communicator->mpi_size;
 
   std::size_t dtype_size = cudf::size_of(local_col.type());
 
@@ -123,8 +123,8 @@ std::unique_ptr<cudf::table> distribute_table(cudf::table_view global_table,
 {
   /* Get MPI information */
 
-  int mpi_rank{communicator->mpi_rank};
-  int mpi_size{communicator->mpi_size};
+  int mpi_rank               = communicator->mpi_rank;
+  int mpi_size               = communicator->mpi_size;
   MPI_Datatype mpi_size_type = mpi_dtype_from_c_type<cudf::size_type>();
 
   /* Broadcast global table size */
@@ -191,8 +191,8 @@ std::unique_ptr<cudf::table> distribute_table(cudf::table_view global_table,
  */
 std::unique_ptr<cudf::table> collect_tables(cudf::table_view table, Communicator *communicator)
 {
-  int mpi_rank{communicator->mpi_rank};
-  int mpi_size{communicator->mpi_size};
+  int mpi_rank = communicator->mpi_rank;
+  int mpi_size = communicator->mpi_size;
 
   int ncols = table.num_columns();
   int nrows = table.num_rows();

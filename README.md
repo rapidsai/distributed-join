@@ -141,9 +141,9 @@ src/
     distribute_table.cuh        Table distribution/collection between the root rank and all worker ranks.
     error.cuh                   Error checking macros.
 test/
-    buffer_communicator.cu      Test the correctness of the buffer communicator.
-    compare_against_shared.cu   Test the correctness of the distributed-join compared to shared-memory implementation on random tables.
-    prebuild.cu                 Test the correctness of the distributed-join compared to known solution.
+    buffer_communicator.cu          Test the correctness of the buffer communicator.
+    compare_against_single_gpu.cu   Test the correctness of the distributed-join compared to single-GPU implementation on random tables.
+    prebuild.cu                     Test the correctness of the distributed-join compared to known solution.
 ```
 
 ## Code formatting

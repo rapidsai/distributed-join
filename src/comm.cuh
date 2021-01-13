@@ -74,19 +74,19 @@ MPI_Datatype mpi_dtype_from_c_type()
  * in *data* destined for the current rank will not be copied.
  */
 void send_data_by_offset(const void *data,
-                         std::vector<int> const &offset,
+                         std::vector<int64_t> const &offset,
                          size_t item_size,
                          Communicator *communicator,
                          bool self_send = true)
 {
-  int mpi_rank{communicator->mpi_rank};
-  int mpi_size{communicator->mpi_size};
+  int mpi_rank = communicator->mpi_rank;
+  int mpi_size = communicator->mpi_size;
 
   for (int itarget_rank = 0; itarget_rank < mpi_size; itarget_rank++) {
     if (!self_send && itarget_rank == mpi_rank) continue;
 
     // calculate the number of elements to send
-    size_t count = offset[itarget_rank + 1] - offset[itarget_rank];
+    int64_t count = offset[itarget_rank + 1] - offset[itarget_rank];
 
     // calculate the starting address
     const void *start_addr = (void *)((char *)data + offset[itarget_rank] * item_size);
@@ -94,6 +94,16 @@ void send_data_by_offset(const void *data,
     // send buffer to the target rank
     communicator->send(start_addr, count, item_size, itarget_rank);
   }
+}
+
+void send_data_by_offset(const void *data,
+                         std::vector<int> const &offset,
+                         size_t item_size,
+                         Communicator *communicator,
+                         bool self_send = true)
+{
+  send_data_by_offset(
+    data, std::vector<int64_t>(offset.begin(), offset.end()), item_size, communicator, self_send);
 }
 
 /**
@@ -116,8 +126,8 @@ void recv_data_by_offset(void *data,
                          Communicator *communicator,
                          bool self_recv = true)
 {
-  int mpi_rank{communicator->mpi_rank};
-  int mpi_size{communicator->mpi_size};
+  int mpi_rank = communicator->mpi_rank;
+  int mpi_size = communicator->mpi_size;
 
   for (int isource_rank = 0; isource_rank < mpi_size; isource_rank++) {
     if (!self_recv && mpi_rank == isource_rank) continue;
