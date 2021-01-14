@@ -164,6 +164,8 @@ struct compression_functor {
   /**
    * Compress a buffer using cascaded compression.
    *
+   * This functor is performed on the default stream and is synchronous to the host thread.
+   *
    * @param[in] uncompressed_data Input buffer to be compressed.
    * @param[in] uncompressed_count Number of elements to be compressed. Note that in general this
    * is different from the size of the buffer.
@@ -213,6 +215,8 @@ struct decompressor_functor {
   /**
    * Decompress a buffer previously compressed by `compression_functor{}.operator()`.
    *
+   * This functor is performed on the default stream and is synchronous to the host thread.
+   *
    * @param[in] compressed_data Input data to be decompressed.
    * @param[in] compressed_size Size of *compressed_data* in bytes.
    * @param[out] output Decompressed output. This argument needs to be preallocated.
@@ -251,6 +255,156 @@ struct decompressor_functor {
     operator()<typename T::rep>(compressed_data, compressed_size, output, expected_output_count);
   }
 };
+
+/**
+ * All-to-all communication of a single batch, with data compression.
+ *
+ * After the all-to-all communication is completed, the data can be decompressed with
+ * *all_to_all_comm_decompression*.
+ *
+ * Note: If the communicator supports grouping by batches, this call is nonblocking and should
+ * be enclosed by `communicator->start()` and `communicator->stop()`.
+ *
+ * @param[in] input Table to be communicated.
+ * @param[in] send_offset Vector of length mpi_size + 1 such that `send_offset[i+1] -
+ * send_offset[i]` is the number of elements sent from the current rank to rank i during the
+ * all-to-all communication.
+ * @param[out] compressed_input Vector of length number of columns, where each element holds the
+ * compressed data of a column to be sent to remote GPUs. This argument does not need to be
+ * preallocated, but the user of this function needs to keep it alive until the communication is
+ * finished.
+ * @param[out] compressed_output Vector of length number of columns, where each element holds the
+ * compressed data of a column received from each remote GPUs. This argument does not need to be
+ * preallocated.
+ * @param[out] compressed_recv_offset `compressed_recv_offset[i,j]` represents the start index of
+ * compressed data in `compressed_output[i]` received from rank `j`.
+ * @param[in] communicator An instance of `Communicator` used for communication.
+ * @param[in] include_self If true, this function will send the partition destined to the current
+ * rank.
+ */
+void all_to_all_comm_with_compression(cudf::table_view input,
+                                      vector<cudf::size_type> const &send_offset,
+                                      vector<rmm::device_buffer> &compressed_input,
+                                      vector<rmm::device_buffer> &compressed_output,
+                                      vector<vector<int64_t>> &compressed_recv_offset,
+                                      Communicator *communicator,
+                                      bool include_self = true)
+{
+  cudf::size_type ncols = input.num_columns();
+  compressed_input.resize(ncols);
+  compressed_output.resize(ncols);
+  compressed_recv_offset.resize(ncols);
+
+  int mpi_rank = communicator->mpi_rank;
+  int mpi_size = communicator->mpi_size;
+
+  for (cudf::size_type icol = 0; icol < ncols; icol++) {
+    cudf::column_view column   = input.column(icol);
+    cudf::data_type dtype      = column.type();
+    cudf::size_type dtype_size = cudf::size_of(dtype);
+
+    vector<rmm::device_buffer> compressed_column(mpi_size);
+    vector<size_t> compressed_column_size(mpi_size, 0);
+
+    // compress each partition in the column separately and store the result in *compressed_column*
+    for (int irank = 0; irank < mpi_size; irank++) {
+      if (!include_self && irank == mpi_rank) continue;
+
+      cudf::type_dispatcher(
+        dtype,
+        compression_functor{},
+        static_cast<const void *>(column.head<char>() + send_offset[irank] * dtype_size),
+        send_offset[irank + 1] - send_offset[irank],
+        compressed_column[irank],
+        compressed_column_size[irank]);
+    }
+
+    // calculate and communicate offsets for compressed column
+    vector<int64_t> compressed_send_offset(mpi_size + 1);
+    compressed_send_offset[0] = 0;
+    for (int irank = 0; irank < mpi_size; irank++) {
+      compressed_send_offset[irank + 1] =
+        compressed_send_offset[irank] + compressed_column_size[irank];
+    }
+
+    communicate_sizes(compressed_send_offset, compressed_recv_offset[icol], communicator);
+
+    // merge compressed data of all partitions in *compressed_column* into a single buffer
+    compressed_input[icol] = rmm::device_buffer(compressed_send_offset.back());
+    for (int irank = 0; irank < mpi_size; irank++) {
+      if (!include_self && irank == mpi_rank) continue;
+
+      CUDA_RT_CALL(
+        cudaMemcpy((void *)((char *)compressed_input[icol].data() + compressed_send_offset[irank]),
+                   compressed_column[irank].data(),
+                   compressed_column_size[irank],
+                   cudaMemcpyDeviceToDevice));
+    }
+
+    compressed_column.clear();
+
+    // allocate receive buffer and launch all-to-all communication
+    compressed_output[icol] = rmm::device_buffer(compressed_recv_offset[icol].back());
+
+    if (!communicator->group_by_batch()) communicator->start();
+
+    send_data_by_offset(
+      compressed_input[icol].data(), compressed_send_offset, 1, communicator, include_self);
+
+    recv_data_by_offset(
+      compressed_output[icol].data(), compressed_recv_offset[icol], 1, communicator, include_self);
+
+    if (!communicator->group_by_batch()) communicator->stop();
+  }
+}
+
+/**
+ * Decompress the data after receiving from remote GPUs.
+ *
+ * @param[out] output Decompressed table. This argument needs to be preallocated with number of rows
+ * equal to the last element in `recv_offset`.
+ * @param[in] recv_offset Vector of size `mpi_size + 1` such that `recv_offset[i]` represents the
+ * start index of `output` to receive data from rank `i`.
+ * @param[in] compressed_output Vector of length number of columns, where each element holds the
+ * compressed data of a column received from each remote GPUs. This is the output of
+ * *all_to_all_comm_with_compression*.
+ * @param[in] compressed_recv_offset `compressed_recv_offset[i,j]` represents the start index of
+ * compressed data in `compressed_output[i]` received from rank `j`. This is the output of
+ * *all_to_all_comm_with_compression*.
+ * @param[in] communicator An instance of `Communicator` used for communication.
+ * @param[in] include_self This argument should be kept consistent with the argument used in
+ * *all_to_all_comm_with_compression*.
+ */
+void all_to_all_comm_decompression(cudf::mutable_table_view output,
+                                   vector<int64_t> const &recv_offset,
+                                   vector<rmm::device_buffer> const &compressed_output,
+                                   vector<vector<int64_t>> const &compressed_recv_offset,
+                                   Communicator *communicator,
+                                   bool include_self = true)
+{
+  int mpi_rank          = communicator->mpi_rank;
+  int mpi_size          = communicator->mpi_size;
+  cudf::size_type ncols = output.num_columns();
+
+  for (cudf::size_type icol = 0; icol < ncols; icol++) {
+    cudf::column_view column   = output.column(icol);
+    cudf::data_type dtype      = column.type();
+    cudf::size_type dtype_size = cudf::size_of(dtype);
+
+    for (int irank = 0; irank < mpi_size; irank++) {
+      if (!include_self && irank == mpi_rank) continue;
+
+      cudf::type_dispatcher(
+        dtype,
+        decompressor_functor{},
+        static_cast<const void *>(static_cast<const char *>(compressed_output[icol].data()) +
+                                  +compressed_recv_offset[icol][irank]),
+        compressed_recv_offset[icol][irank + 1] - compressed_recv_offset[icol][irank],
+        (void *)(column.head<char>() + recv_offset[irank] * dtype_size),
+        recv_offset[irank + 1] - recv_offset[irank]);
+    }
+  }
+}
 
 /**
  * Local join thread used for merging incoming partitions and performing local joins.
