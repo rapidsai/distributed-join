@@ -166,6 +166,8 @@ struct compression_functor {
   /**
    * Compress a buffer using cascaded compression.
    *
+   * This functor is performed on the default stream and is synchronous to the host thread.
+   *
    * @param[in] uncompressed_data Input buffer to be compressed.
    * @param[in] uncompressed_count Number of elements to be compressed. Note that in general this
    * is different from the size of the buffer.
@@ -223,6 +225,8 @@ struct compression_functor {
 struct decompressor_functor {
   /**
    * Decompress a buffer previously compressed by `compression_functor{}.operator()`.
+   *
+   * This functor is performed on the default stream and is synchronous to the host thread.
    *
    * @param[in] compressed_data Input data to be decompressed.
    * @param[in] compressed_size Size of *compressed_data* in bytes.

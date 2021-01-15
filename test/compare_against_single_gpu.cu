@@ -14,6 +14,20 @@
  * limitations under the License.
  */
 
+/*
+This test case compares the result of distributed join on multiple GPUs to the result of
+cudf::inner_join on a single GPU.
+
+Specifically, it follows the following steps:
+1. The root rank constructs a random build table and a random probe table.
+2. The root rank runs cudf::inner_join on the newly constructed tables.
+3. The root rank distributes the build and probe table across all ranks.
+4. All ranks run distibuted join collectively.
+5. Each rank sends the distributed join result to the root rank.
+6. The root rank assembles the received results into a single table and compares it to the result of
+step 2.
+*/
+
 #include <cstdint>
 #include <iostream>
 #include <memory>

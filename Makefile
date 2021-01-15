@@ -19,7 +19,7 @@ LDFLAGS=${NCCL_LIBS} ${MPI_LIBS} ${CUDA_LIBS} ${UCX_LIBS} ${CUDF_LIBS} ${NVCOMP_
 generate_dataset=generate_dataset/generate_dataset.cuh generate_dataset/nvtx_helper.cuh
 src=src/comm.cuh src/error.cuh src/distribute_table.cuh src/distributed_join.cuh src/generate_table.cuh src/communicator.o src/registered_memory_resource.hpp
 
-all: benchmark/distributed_join benchmark/all_to_all benchmark/tpch test/compare_against_shared test/prebuild test/buffer_communicator test/string_payload
+all: benchmark/distributed_join benchmark/all_to_all benchmark/tpch test/compare_against_single_gpu test/prebuild test/buffer_communicator test/string_payload
 
 benchmark/distributed_join: benchmark/distributed_join.cu $(generate_dataset) $(src)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o benchmark/distributed_join benchmark/distributed_join.cu src/communicator.o
@@ -30,8 +30,8 @@ benchmark/all_to_all: benchmark/all_to_all.cu $(src)
 benchmark/tpch: benchmark/tpch.cu $(src)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o benchmark/tpch benchmark/tpch.cu src/communicator.o
 
-test/compare_against_shared: test/compare_against_shared.cu $(generate_dataset) $(src)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o test/compare_against_shared test/compare_against_shared.cu src/communicator.o
+test/compare_against_single_gpu: test/compare_against_single_gpu.cu $(generate_dataset) $(src)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o test/compare_against_single_gpu test/compare_against_single_gpu.cu src/communicator.o
 
 test/prebuild: test/prebuild.cu $(src)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o test/prebuild test/prebuild.cu src/communicator.o
@@ -46,4 +46,4 @@ src/communicator.o: src/communicator.h src/communicator.cu
 	$(CC) $(CFLAGS) $(LDFLAGS) -o src/communicator.o -c src/communicator.cu
 
 clean:
-	rm -f benchmark/distributed_join benchmark/all_to_all benchmark/tpch test/compare_against_shared test/prebuild src/communicator.o test/buffer_communicator test/string_payload
+	rm -f benchmark/distributed_join benchmark/all_to_all benchmark/tpch test/compare_against_single_gpu test/prebuild src/communicator.o test/buffer_communicator test/string_payload
