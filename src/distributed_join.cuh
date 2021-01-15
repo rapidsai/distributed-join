@@ -18,6 +18,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <iostream>
 #include <memory>
 #include <numeric>
@@ -45,6 +46,7 @@
 #include <cudf/types.hpp>
 #include <cudf/utilities/type_dispatcher.hpp>
 #include <nvcomp.hpp>
+#include <rmm/cuda_stream.hpp>
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/device_buffer.hpp>
 #include <rmm/mr/device/device_memory_resource.hpp>
@@ -170,14 +172,17 @@ struct compression_functor {
    * @param[out] compressed_data Output data after cascaded compression. This argument does not
    * need to be preallocated.
    * @param[out] compressed_size Number of bytes of *compressed_data*.
+   * @param[in] stream CUDA stream used for the compression kernels.
    */
   template <typename T,
             std::enable_if_t<not cudf::is_timestamp_t<T>::value and
                              not cudf::is_duration_t<T>::value> * = nullptr>
   void operator()(const void *uncompressed_data,
                   size_t uncompressed_count,
+                  rmm::device_buffer &temp_space,
                   rmm::device_buffer &compressed_data,
-                  size_t &compressed_size)
+                  size_t &compressed_size,
+                  rmm::cuda_stream_view stream)
   {
     if (uncompressed_count == 0) {
       compressed_size = 0;
@@ -188,16 +193,15 @@ struct compression_functor {
       static_cast<const T *>(uncompressed_data), uncompressed_count, 1, 1, true);
 
     const size_t temp_size = compressor.get_temp_size();
-    rmm::device_buffer temp_space(temp_size);
-    compressed_size = compressor.get_max_output_size(temp_space.data(), temp_size);
-    compressed_data = rmm::device_buffer(compressed_size);
+    temp_space             = rmm::device_buffer(temp_size, stream);
+    compressed_size        = compressor.get_max_output_size(temp_space.data(), temp_size);
+    compressed_data        = rmm::device_buffer(compressed_size, stream);
 
     // Set the output buffer to 0 to get away a bug in nvcomp
-    CUDA_RT_CALL(cudaMemset(compressed_data.data(), 0, compressed_size));
+    CUDA_RT_CALL(cudaMemsetAsync(compressed_data.data(), 0, compressed_size, stream.value()));
 
     compressor.compress_async(
-      temp_space.data(), temp_size, compressed_data.data(), &compressed_size, cudaStreamDefault);
-    CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
+      temp_space.data(), temp_size, compressed_data.data(), &compressed_size, stream.value());
   }
 
   template <
@@ -205,12 +209,14 @@ struct compression_functor {
     std::enable_if_t<cudf::is_timestamp_t<T>::value or cudf::is_duration_t<T>::value> * = nullptr>
   void operator()(const void *uncompressed_data,
                   size_t uncompressed_count,
+                  rmm::device_buffer &temp_space,
                   rmm::device_buffer &compressed_data,
-                  size_t &compressed_size)
+                  size_t &compressed_size,
+                  rmm::cuda_stream_view stream)
   {
     // If the data type is duration or time, use the corresponding arithmetic type
     operator()<typename T::rep>(
-      uncompressed_data, uncompressed_count, compressed_data, compressed_size);
+      uncompressed_data, uncompressed_count, temp_space, compressed_data, compressed_size, stream);
   }
 };
 
@@ -700,6 +706,12 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
   double total_uncompressed_size = 0.0;
   double total_compressed_size   = 0.0;
 
+  size_t *compressed_buffer_sizes_pinned;
+  CUDA_RT_CALL(cudaMallocHost(&compressed_buffer_sizes_pinned, mpi_size * sizeof(size_t)));
+
+  std::vector<rmm::cuda_stream> compression_streams;
+  for (int irank = 0; irank < mpi_size; irank++) compression_streams.emplace_back();
+
   for (auto &buffer : all_to_all_comm_buffers) {
     if (!buffer.compression) {
       if (!communicator->group_by_batch()) communicator->start();
@@ -728,28 +740,39 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
     // The all-to-all interface works on a single buffer with offsets. Since we don't know the
     // compressed size without actually doing the compression, we cannot pre-allocate this buffer
     // beforehand. Instead we compress each partition in the send buffer separately. Once the
-    // compression is done, we can allocate the compressed send buffer and copy the compressed data
-    // into the buffer. The all-to-all communication can reuse the `send_data_by_offset` and
+    // compression is done, we can allocate the compressed send buffer and copy the compressed
+    // data into the buffer. The all-to-all communication can reuse the `send_data_by_offset` and
     // `recv_data_by_offset` functions.
 
     if (report_timing) { start_time = MPI_Wtime(); }
 
     // Compress each partition in the send buffer separately and store the result in
     // `compressed_buffers`
+    vector<rmm::device_buffer> temp_spaces(mpi_size);
     vector<rmm::device_buffer> compressed_buffers(mpi_size);
-    vector<size_t> compressed_buffer_sizes(mpi_size, 0);
+    vector<size_t> compressed_buffer_sizes(mpi_size);
 
     for (int irank = 0; irank < mpi_size; irank++) {
-      if (!include_self && irank == mpi_rank) continue;
+      if (!include_self && irank == mpi_rank) {
+        compressed_buffer_sizes_pinned[irank] = 0;
+        continue;
+      }
 
       cudf::type_dispatcher(
         buffer.dtype,
         compression_functor{},
         ADV_PTR(buffer.send_buffer, buffer.send_offsets[irank] * cudf::size_of(buffer.dtype)),
         buffer.send_offsets[irank + 1] - buffer.send_offsets[irank],
+        temp_spaces[irank],
         compressed_buffers[irank],
-        compressed_buffer_sizes[irank]);
+        compressed_buffer_sizes_pinned[irank],
+        compression_streams[irank].view());
     }
+
+    for (auto &stream : compression_streams) stream.synchronize();
+
+    memcpy(
+      compressed_buffer_sizes.data(), compressed_buffer_sizes_pinned, mpi_size * sizeof(size_t));
 
     // Calculate and communicate offsets for the compressed buffers
     buffer.compressed_send_offsets.resize(mpi_size + 1);
@@ -762,7 +785,8 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
     if (report_timing) {
       stop_time = MPI_Wtime();
       total_compression_time += (stop_time - start_time);
-      total_uncompressed_size += (buffer.send_offsets.back() * cudf::size_of(buffer.dtype));
+      total_uncompressed_size +=
+        ((buffer.send_offsets.back() - buffer.send_offsets[0]) * cudf::size_of(buffer.dtype));
       total_compressed_size += buffer.compressed_send_offsets.back();
     }
 
@@ -801,7 +825,9 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
     if (!communicator->group_by_batch()) communicator->stop();
   }
 
-  if (report_timing) {
+  CUDA_RT_CALL(cudaFreeHost(compressed_buffer_sizes_pinned));
+
+  if (total_uncompressed_size && report_timing) {
     std::cout << "Rank " << mpi_rank << ": compression takes " << total_compression_time * 1e3
               << "ms"
               << " with compression ratio " << total_uncompressed_size / total_compressed_size
@@ -1177,12 +1203,17 @@ void warmup_nvcomp()
 {
   constexpr size_t warmup_size = 1000;
   rmm::device_buffer input_data(warmup_size * sizeof(int));
+  rmm::device_buffer temp_space;
   rmm::device_buffer compressed_data;
   rmm::device_buffer decompressed_data(warmup_size * sizeof(int));
   size_t compressed_size;
 
-  compression_functor{}.operator()<int>(
-    input_data.data(), warmup_size, compressed_data, compressed_size);
+  compression_functor{}.operator()<int>(input_data.data(),
+                                        warmup_size,
+                                        temp_space,
+                                        compressed_data,
+                                        compressed_size,
+                                        rmm::cuda_stream_default);
 
   decompressor_functor{}.operator()<int>(
     compressed_data.data(), compressed_size, decompressed_data.data(), warmup_size);
