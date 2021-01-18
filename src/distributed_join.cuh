@@ -164,107 +164,153 @@ void communicate_sizes(vector<cudf::size_type> const &send_offset,
 
 struct compression_functor {
   /**
-   * Compress a buffer using cascaded compression.
+   * Compress a vector of buffers using cascaded compression.
    *
-   * This functor is performed on the default stream and is synchronous to the host thread.
-   *
-   * @param[in] uncompressed_data Input buffer to be compressed.
-   * @param[in] uncompressed_count Number of elements to be compressed. Note that in general this
-   * is different from the size of the buffer.
-   * @param[out] compressed_data Output data after cascaded compression. This argument does not
-   * need to be preallocated.
-   * @param[out] compressed_size Number of bytes of *compressed_data*.
-   * @param[in] stream CUDA stream used for the compression kernels.
+   * @param[in] uncompressed_data Input buffers to be compressed.
+   * @param[in] uncompressed_counts Number of elements to be compressed for each buffer in
+   * *uncompressed_data*. Note that in general this is different from the size of the buffer.
+   * @param[out] compressed_data Compressed buffers after cascaded compression. This argument does
+   * not need to be preallocated.
+   * @param[out] compressed_sizes Number of bytes for each buffer in *compressed_data*.
+   * @param[in] streams CUDA streams used for the compression kernels.
    */
   template <typename T,
             std::enable_if_t<not cudf::is_timestamp_t<T>::value and
                              not cudf::is_duration_t<T>::value> * = nullptr>
-  void operator()(const void *uncompressed_data,
-                  size_t uncompressed_count,
-                  rmm::device_buffer &temp_space,
-                  rmm::device_buffer &compressed_data,
-                  size_t &compressed_size,
-                  rmm::cuda_stream_view stream)
+  void operator()(std::vector<const void *> const &uncompressed_data,
+                  std::vector<cudf::size_type> const &uncompressed_counts,
+                  std::vector<rmm::device_buffer> &compressed_data,
+                  size_t *compressed_sizes,
+                  std::vector<rmm::cuda_stream_view> const &streams)
   {
-    if (uncompressed_count == 0) {
-      compressed_size = 0;
-      return;
+    size_t npartitions = uncompressed_counts.size();
+    compressed_data.resize(npartitions);
+
+    vector<rmm::device_buffer> temp_spaces(npartitions);
+    vector<size_t> temp_sizes(npartitions);
+
+    for (size_t ipartition = 0; ipartition < npartitions; ipartition++) {
+      if (uncompressed_counts[ipartition] == 0) {
+        compressed_sizes[ipartition] = 0;
+        continue;
+      }
+
+      nvcomp::CascadedCompressor<T> compressor(
+        static_cast<const T *>(uncompressed_data[ipartition]),
+        uncompressed_counts[ipartition],
+        1,
+        1,
+        true);
+
+      temp_sizes[ipartition]  = compressor.get_temp_size();
+      temp_spaces[ipartition] = rmm::device_buffer(temp_sizes[ipartition], streams[ipartition]);
+      compressed_sizes[ipartition] =
+        compressor.get_max_output_size(temp_spaces[ipartition].data(), temp_sizes[ipartition]);
+      compressed_data[ipartition] =
+        rmm::device_buffer(compressed_sizes[ipartition], streams[ipartition]);
     }
 
-    nvcomp::CascadedCompressor<T> compressor(
-      static_cast<const T *>(uncompressed_data), uncompressed_count, 1, 1, true);
+    for (size_t ipartition = 0; ipartition < npartitions; ipartition++) {
+      if (uncompressed_counts[ipartition] == 0) continue;
 
-    const size_t temp_size = compressor.get_temp_size();
-    temp_space             = rmm::device_buffer(temp_size, stream);
-    compressed_size        = compressor.get_max_output_size(temp_space.data(), temp_size);
-    compressed_data        = rmm::device_buffer(compressed_size, stream);
+      nvcomp::CascadedCompressor<T> compressor(
+        static_cast<const T *>(uncompressed_data[ipartition]),
+        uncompressed_counts[ipartition],
+        1,
+        1,
+        true);
 
-    // Set the output buffer to 0 to get away a bug in nvcomp
-    CUDA_RT_CALL(cudaMemsetAsync(compressed_data.data(), 0, compressed_size, stream.value()));
+      // Set the output buffer to 0 to get away a bug in nvcomp
+      CUDA_RT_CALL(cudaMemsetAsync(compressed_data[ipartition].data(),
+                                   0,
+                                   compressed_sizes[ipartition],
+                                   streams[ipartition].value()));
 
-    compressor.compress_async(
-      temp_space.data(), temp_size, compressed_data.data(), &compressed_size, stream.value());
+      compressor.compress_async(temp_spaces[ipartition].data(),
+                                temp_sizes[ipartition],
+                                compressed_data[ipartition].data(),
+                                &compressed_sizes[ipartition],
+                                streams[ipartition].value());
+    }
   }
 
   template <
     typename T,
     std::enable_if_t<cudf::is_timestamp_t<T>::value or cudf::is_duration_t<T>::value> * = nullptr>
-  void operator()(const void *uncompressed_data,
-                  size_t uncompressed_count,
-                  rmm::device_buffer &temp_space,
-                  rmm::device_buffer &compressed_data,
-                  size_t &compressed_size,
-                  rmm::cuda_stream_view stream)
+  void operator()(std::vector<const void *> const &uncompressed_data,
+                  std::vector<cudf::size_type> const &uncompressed_counts,
+                  std::vector<rmm::device_buffer> &compressed_data,
+                  size_t *compressed_sizes,
+                  std::vector<rmm::cuda_stream_view> const &streams)
   {
     // If the data type is duration or time, use the corresponding arithmetic type
     operator()<typename T::rep>(
-      uncompressed_data, uncompressed_count, temp_space, compressed_data, compressed_size, stream);
+      uncompressed_data, uncompressed_counts, compressed_data, compressed_sizes, streams);
   }
 };
 
-struct decompressor_functor {
+struct decompression_functor {
   /**
-   * Decompress a buffer previously compressed by `compression_functor{}.operator()`.
+   * Decompress a vector of buffers previously compressed by `compression_functor{}.operator()`.
    *
-   * This functor is performed on the default stream and is synchronous to the host thread.
-   *
-   * @param[in] compressed_data Input data to be decompressed.
-   * @param[in] compressed_size Size of *compressed_data* in bytes.
-   * @param[out] output Decompressed output. This argument needs to be preallocated.
-   * @param[in] expected_output_count Expected number of elements in the decompressed buffer.
+   * @param[in] compressed_data Vector of input data to be decompressed.
+   * @param[in] compressed_sizes Sizes of *compressed_data* in bytes.
+   * @param[out] outputs Decompressed outputs. This argument needs to be preallocated.
+   * @param[in] expected_output_counts Expected number of elements in the decompressed buffers.
    */
   template <typename T,
             std::enable_if_t<not cudf::is_timestamp_t<T>::value and
                              not cudf::is_duration_t<T>::value> * = nullptr>
-  void operator()(const void *compressed_data,
-                  size_t compressed_size,
-                  void *output,
-                  size_t expected_output_count)
+  void operator()(vector<const void *> const &compressed_data,
+                  vector<int64_t> const &compressed_sizes,
+                  vector<void *> const &outputs,
+                  vector<int64_t> const &expected_output_counts,
+                  vector<rmm::cuda_stream_view> const &streams)
   {
-    if (expected_output_count == 0) return;
+    size_t npartitions = compressed_sizes.size();
 
-    nvcomp::Decompressor<T> decompressor(compressed_data, compressed_size, cudaStreamDefault);
-    const size_t output_count = decompressor.get_num_elements();
-    assert(output_count == expected_output_count);
+    vector<rmm::device_buffer> temp_spaces(npartitions);
+    vector<size_t> temp_sizes(npartitions);
 
-    const size_t temp_size = decompressor.get_temp_size();
-    rmm::device_buffer temp_space(temp_size);
+    for (int ipartition = 0; ipartition < npartitions; ipartition++) {
+      if (expected_output_counts[ipartition] == 0) continue;
 
-    decompressor.decompress_async(
-      temp_space.data(), temp_size, static_cast<T *>(output), output_count, cudaStreamDefault);
-    CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
+      nvcomp::Decompressor<T> decompressor(
+        compressed_data[ipartition], compressed_sizes[ipartition], streams[ipartition].value());
+
+      const size_t output_count = decompressor.get_num_elements();
+      assert(output_count == expected_output_counts[ipartition]);
+
+      temp_sizes[ipartition]  = decompressor.get_temp_size();
+      temp_spaces[ipartition] = rmm::device_buffer(temp_sizes[ipartition], streams[ipartition]);
+    }
+
+    for (int ipartition = 0; ipartition < npartitions; ipartition++) {
+      if (expected_output_counts[ipartition] == 0) continue;
+
+      nvcomp::Decompressor<T> decompressor(
+        compressed_data[ipartition], compressed_sizes[ipartition], streams[ipartition].value());
+
+      decompressor.decompress_async(temp_spaces[ipartition].data(),
+                                    temp_sizes[ipartition],
+                                    static_cast<T *>(outputs[ipartition]),
+                                    expected_output_counts[ipartition],
+                                    streams[ipartition].value());
+    }
   }
 
   template <
     typename T,
     std::enable_if_t<cudf::is_timestamp_t<T>::value or cudf::is_duration_t<T>::value> * = nullptr>
-  void operator()(const void *compressed_data,
-                  size_t compressed_size,
-                  void *output,
-                  size_t expected_output_count)
+  void operator()(vector<const void *> const &compressed_data,
+                  vector<int64_t> const &compressed_sizes,
+                  vector<void *> const &outputs,
+                  vector<int64_t> const &expected_output_counts,
+                  vector<rmm::cuda_stream_view> const &streams)
   {
     // If the data type is duration or time, use the corresponding arithmetic type
-    operator()<typename T::rep>(compressed_data, compressed_size, output, expected_output_count);
+    operator()<typename T::rep>(
+      compressed_data, compressed_sizes, outputs, expected_output_counts, streams);
   }
 };
 
@@ -716,6 +762,10 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
   std::vector<rmm::cuda_stream> compression_streams;
   for (int irank = 0; irank < mpi_size; irank++) compression_streams.emplace_back();
 
+  std::vector<rmm::cuda_stream_view> compression_stream_views;
+  for (int irank = 0; irank < mpi_size; irank++)
+    compression_stream_views.push_back(compression_streams[irank].view());
+
   for (auto &buffer : all_to_all_comm_buffers) {
     if (!buffer.compression) {
       if (!communicator->group_by_batch()) communicator->start();
@@ -745,33 +795,37 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
     // compressed size without actually doing the compression, we cannot pre-allocate this buffer
     // beforehand. Instead we compress each partition in the send buffer separately. Once the
     // compression is done, we can allocate the compressed send buffer and copy the compressed
-    // data into the buffer. The all-to-all communication can reuse the `send_data_by_offset` and
-    // `recv_data_by_offset` functions.
+    // data into the buffer. Then, all-to-all communication can reuse helper functions
+    // `send_data_by_offset` and `recv_data_by_offset` functions.
 
     if (report_timing) { start_time = MPI_Wtime(); }
 
     // Compress each partition in the send buffer separately and store the result in
     // `compressed_buffers`
-    vector<rmm::device_buffer> temp_spaces(mpi_size);
-    vector<rmm::device_buffer> compressed_buffers(mpi_size);
-    vector<size_t> compressed_buffer_sizes(mpi_size);
+    vector<const void *> uncompressed_data(mpi_size);
+    vector<cudf::size_type> uncompressed_counts(mpi_size);
 
     for (int irank = 0; irank < mpi_size; irank++) {
       if (!include_self && irank == mpi_rank) {
-        compressed_buffer_sizes_pinned[irank] = 0;
+        uncompressed_data[irank]   = nullptr;
+        uncompressed_counts[irank] = 0;
         continue;
       }
-
-      cudf::type_dispatcher(
-        buffer.dtype,
-        compression_functor{},
-        ADV_PTR(buffer.send_buffer, buffer.send_offsets[irank] * cudf::size_of(buffer.dtype)),
-        buffer.send_offsets[irank + 1] - buffer.send_offsets[irank],
-        temp_spaces[irank],
-        compressed_buffers[irank],
-        compressed_buffer_sizes_pinned[irank],
-        compression_streams[irank].view());
+      uncompressed_data[irank] =
+        ADV_PTR(buffer.send_buffer, buffer.send_offsets[irank] * cudf::size_of(buffer.dtype));
+      uncompressed_counts[irank] = buffer.send_offsets[irank + 1] - buffer.send_offsets[irank];
     }
+
+    vector<rmm::device_buffer> compressed_buffers;
+    vector<size_t> compressed_buffer_sizes(mpi_size);
+
+    cudf::type_dispatcher(buffer.dtype,
+                          compression_functor{},
+                          uncompressed_data,
+                          uncompressed_counts,
+                          compressed_buffers,
+                          compressed_buffer_sizes_pinned,
+                          compression_stream_views);
 
     for (auto &stream : compression_streams) stream.synchronize();
 
@@ -858,21 +912,46 @@ void postprocess_all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buf
 
   if (report_timing) { start_time = MPI_Wtime(); }
 
+  std::vector<rmm::cuda_stream> decompression_streams;
+  for (int irank = 0; irank < mpi_size; irank++) decompression_streams.emplace_back();
+
+  std::vector<rmm::cuda_stream_view> decompression_stream_views;
+  for (int irank = 0; irank < mpi_size; irank++)
+    decompression_stream_views.push_back(decompression_streams[irank].view());
+
   // Decompress compressed data into destination buffer
   for (auto &buffer : all_to_all_comm_buffers) {
     if (!buffer.compression) continue;
 
-    for (int irank = 0; irank < mpi_size; irank++) {
-      if (!include_self && irank == mpi_rank) continue;
+    vector<const void *> compressed_data(mpi_size);
+    vector<int64_t> compressed_sizes(mpi_size);
+    vector<void *> outputs(mpi_size);
+    vector<int64_t> expected_output_counts(mpi_size);
 
-      cudf::type_dispatcher(
-        buffer.dtype,
-        decompressor_functor{},
-        ADV_PTR(buffer.compressed_recv_buffer.data(), buffer.compressed_recv_offsets[irank]),
-        buffer.compressed_recv_offsets[irank + 1] - buffer.compressed_recv_offsets[irank],
-        ADV_PTR(buffer.recv_buffer, buffer.recv_offsets[irank] * cudf::size_of(buffer.dtype)),
-        buffer.recv_offsets[irank + 1] - buffer.recv_offsets[irank]);
+    for (int irank = 0; irank < mpi_size; irank++) {
+      if (!include_self && irank == mpi_rank) {
+        compressed_sizes[irank]       = 0;
+        expected_output_counts[irank] = 0;
+        continue;
+      }
+      compressed_data[irank] =
+        ADV_PTR(buffer.compressed_recv_buffer.data(), buffer.compressed_recv_offsets[irank]);
+      compressed_sizes[irank] =
+        buffer.compressed_recv_offsets[irank + 1] - buffer.compressed_recv_offsets[irank];
+      outputs[irank] =
+        ADV_PTR(buffer.recv_buffer, buffer.recv_offsets[irank] * cudf::size_of(buffer.dtype));
+      expected_output_counts[irank] = buffer.recv_offsets[irank + 1] - buffer.recv_offsets[irank];
     }
+
+    cudf::type_dispatcher(buffer.dtype,
+                          decompression_functor{},
+                          compressed_data,
+                          compressed_sizes,
+                          outputs,
+                          expected_output_counts,
+                          decompression_stream_views);
+
+    for (auto &stream : decompression_streams) stream.synchronize();
 
     if (report_timing)
       total_uncompressed_size += (buffer.recv_offsets.back() * cudf::size_of(buffer.dtype));
@@ -1207,18 +1286,21 @@ void warmup_nvcomp()
 {
   constexpr size_t warmup_size = 1000;
   rmm::device_buffer input_data(warmup_size * sizeof(int));
-  rmm::device_buffer temp_space;
-  rmm::device_buffer compressed_data;
-  rmm::device_buffer decompressed_data(warmup_size * sizeof(int));
+
+  std::vector<rmm::device_buffer> compressed_data(1);
   size_t compressed_size;
 
-  compression_functor{}.operator()<int>(input_data.data(),
-                                        warmup_size,
-                                        temp_space,
+  compression_functor{}.operator()<int>({input_data.data()},
+                                        {warmup_size},
                                         compressed_data,
-                                        compressed_size,
-                                        rmm::cuda_stream_default);
+                                        &compressed_size,
+                                        {rmm::cuda_stream_default});
 
-  decompressor_functor{}.operator()<int>(
-    compressed_data.data(), compressed_size, decompressed_data.data(), warmup_size);
+  rmm::device_buffer decompressed_data(warmup_size * sizeof(int));
+
+  decompression_functor{}.operator()<int>({compressed_data[0].data()},
+                                          {static_cast<int64_t>(compressed_size)},
+                                          {decompressed_data.data()},
+                                          {warmup_size},
+                                          {rmm::cuda_stream_default});
 }
