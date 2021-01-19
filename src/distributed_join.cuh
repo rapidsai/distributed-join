@@ -272,31 +272,36 @@ struct decompression_functor {
     vector<rmm::device_buffer> temp_spaces(npartitions);
     vector<size_t> temp_sizes(npartitions);
 
+    nvcomp::Decompressor<T> **decompressors = new nvcomp::Decompressor<T> *[npartitions];
+    memset(decompressors, 0, sizeof(nvcomp::Decompressor<T> *) * npartitions);
+
     for (int ipartition = 0; ipartition < npartitions; ipartition++) {
       if (expected_output_counts[ipartition] == 0) continue;
 
-      nvcomp::Decompressor<T> decompressor(
+      decompressors[ipartition] = new nvcomp::Decompressor<T>(
         compressed_data[ipartition], compressed_sizes[ipartition], streams[ipartition].value());
 
-      const size_t output_count = decompressor.get_num_elements();
+      const size_t output_count = decompressors[ipartition]->get_num_elements();
       assert(output_count == expected_output_counts[ipartition]);
 
-      temp_sizes[ipartition]  = decompressor.get_temp_size();
+      temp_sizes[ipartition]  = decompressors[ipartition]->get_temp_size();
       temp_spaces[ipartition] = rmm::device_buffer(temp_sizes[ipartition], streams[ipartition]);
     }
 
     for (int ipartition = 0; ipartition < npartitions; ipartition++) {
       if (expected_output_counts[ipartition] == 0) continue;
 
-      nvcomp::Decompressor<T> decompressor(
-        compressed_data[ipartition], compressed_sizes[ipartition], streams[ipartition].value());
-
-      decompressor.decompress_async(temp_spaces[ipartition].data(),
-                                    temp_sizes[ipartition],
-                                    static_cast<T *>(outputs[ipartition]),
-                                    expected_output_counts[ipartition],
-                                    streams[ipartition].value());
+      decompressors[ipartition]->decompress_async(temp_spaces[ipartition].data(),
+                                                  temp_sizes[ipartition],
+                                                  static_cast<T *>(outputs[ipartition]),
+                                                  expected_output_counts[ipartition],
+                                                  streams[ipartition].value());
     }
+
+    for (int ipartition = 0; ipartition < npartitions; ipartition++)
+      delete decompressors[ipartition];
+
+    delete[] decompressors;
   }
 
   template <
@@ -957,7 +962,7 @@ void postprocess_all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buf
       total_uncompressed_size += (buffer.recv_offsets.back() * cudf::size_of(buffer.dtype));
   }
 
-  if (report_timing) {
+  if (total_uncompressed_size && report_timing) {
     stop_time       = MPI_Wtime();
     double duration = stop_time - start_time;
     std::cout << "Rank " << mpi_rank << ": decompression takes " << duration * 1e3 << "ms"
