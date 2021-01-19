@@ -272,6 +272,10 @@ struct decompression_functor {
     vector<rmm::device_buffer> temp_spaces(npartitions);
     vector<size_t> temp_sizes(npartitions);
 
+    // nvcomp::Decompressor objects are reused in the two passes below since nvcomp::Decompressor
+    // constructor can be synchrnous to the host thread. new operator is used instead of
+    // std::vector because the copy constructor in nvcomp::Decompressor is deleted.
+
     nvcomp::Decompressor<T> **decompressors = new nvcomp::Decompressor<T> *[npartitions];
     memset(decompressors, 0, sizeof(nvcomp::Decompressor<T> *) * npartitions);
 
