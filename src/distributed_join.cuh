@@ -750,11 +750,14 @@ void preprocess_all_to_all_comm(cudf::table_view input,
  * @param[in] communicator An instance of `Communicator` used for communication.
  * @param[in] include_self If true, this function will send the partition destined to the current
  * rank.
+ * @param[in] preallocated_pinned_buffer Preallocated page-locked host buffer with size at least
+ * `mpi_size * sizeof(size_t)`, used for holding the compressed sizes.
  */
 void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
                      Communicator *communicator,
-                     bool include_self  = true,
-                     bool report_timing = false)
+                     bool include_self                = true,
+                     bool report_timing               = false,
+                     void *preallocated_pinned_buffer = nullptr)
 {
   int mpi_rank = communicator->mpi_rank;
   int mpi_size = communicator->mpi_size;
@@ -765,8 +768,8 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
   double total_uncompressed_size = 0.0;
   double total_compressed_size   = 0.0;
 
-  size_t *compressed_buffer_sizes_pinned;
-  CUDA_RT_CALL(cudaMallocHost(&compressed_buffer_sizes_pinned, mpi_size * sizeof(size_t)));
+  size_t *compressed_buffer_sizes_pinned    = static_cast<size_t *>(preallocated_pinned_buffer);
+  bool alloc_compressed_buffer_sizes_pinned = false;
 
   std::vector<rmm::cuda_stream> compression_streams;
   for (int irank = 0; irank < mpi_size; irank++) compression_streams.emplace_back();
@@ -808,6 +811,11 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
     // `send_data_by_offset` and `recv_data_by_offset` functions.
 
     if (report_timing) { start_time = MPI_Wtime(); }
+
+    if (compressed_buffer_sizes_pinned == nullptr) {
+      CUDA_RT_CALL(cudaMallocHost(&compressed_buffer_sizes_pinned, mpi_size * sizeof(size_t)));
+      alloc_compressed_buffer_sizes_pinned = true;
+    }
 
     // Compress each partition in the send buffer separately and store the result in
     // `compressed_buffers`
@@ -892,7 +900,9 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
     if (!communicator->group_by_batch()) communicator->stop();
   }
 
-  CUDA_RT_CALL(cudaFreeHost(compressed_buffer_sizes_pinned));
+  if (alloc_compressed_buffer_sizes_pinned) {
+    CUDA_RT_CALL(cudaFreeHost(compressed_buffer_sizes_pinned));
+  }
 
   if (total_uncompressed_size && report_timing) {
     std::cout << "Rank " << mpi_rank << ": compression takes " << total_compression_time * 1e3
@@ -1004,6 +1014,8 @@ void postprocess_all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buf
  * @param[in] over_decom_factor Over-decomposition factor used for overlapping computation and
  * communication.
  * @param[in] report_timing Whether collect and print timing.
+ * @param[in] preallocated_pinned_buffer Preallocated page-locked host buffer with size at least
+ * `mpi_size * sizeof(size_t)`, used for holding the compressed sizes.
  * @return Result of joining `left` and `right` tables on the columns
  * specified by `left_on` and `right_on`. The resulting table will be joined columns of
  * `left(including common columns)+right(excluding common columns)`. The join result is the
@@ -1016,9 +1028,10 @@ std::unique_ptr<table> distributed_inner_join(
   vector<cudf::size_type> const &right_on,
   vector<std::pair<cudf::size_type, cudf::size_type>> const &columns_in_common,
   Communicator *communicator,
-  int over_decom_factor = 1,
-  bool compression      = false,
-  bool report_timing    = false)
+  int over_decom_factor            = 1,
+  bool compression                 = false,
+  bool report_timing               = false,
+  void *preallocated_pinned_buffer = nullptr)
 {
   if (over_decom_factor == 1) {
     // @TODO: If over_decom_factor is 1, there is no opportunity for overlapping. Therefore,
@@ -1246,7 +1259,8 @@ std::unique_ptr<table> distributed_inner_join(
     // all-to-all communication for the ibatch
     if (communicator->group_by_batch()) communicator->start();
 
-    all_to_all_comm(all_to_all_comm_buffers, communicator, false, report_timing);
+    all_to_all_comm(
+      all_to_all_comm_buffers, communicator, false, report_timing, preallocated_pinned_buffer);
 
     if (communicator->group_by_batch()) communicator->stop();
 

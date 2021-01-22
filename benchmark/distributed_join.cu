@@ -151,6 +151,9 @@ int main(int argc, char *argv[])
                                      REGISTRATION_METHOD,
                                      COMMUNICATOR_BUFFER_SIZE);
 
+  void *preallocated_pinned_buffer;
+  CUDA_RT_CALL(cudaMallocHost(&preallocated_pinned_buffer, mpi_size * sizeof(size_t)));
+
   /* Warmup nvcomp */
 
   if (COMPRESSION) { warmup_nvcomp(); }
@@ -206,7 +209,9 @@ int main(int argc, char *argv[])
                            {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
                            communicator,
                            OVER_DECOMPOSITION_FACTOR,
-                           COMPRESSION);
+                           COMPRESSION,
+                           false,
+                           preallocated_pinned_buffer);
 
   MPI_Barrier(MPI_COMM_WORLD);
   double stop = MPI_Wtime();
@@ -218,6 +223,7 @@ int main(int argc, char *argv[])
   left.reset();
   right.reset();
   join_result.reset();
+  CUDA_RT_CALL(cudaFreeHost(preallocated_pinned_buffer));
   CUDA_RT_CALL(cudaDeviceSynchronize());
 
   destroy_memory_pool_and_communicator(
