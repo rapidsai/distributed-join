@@ -15,20 +15,30 @@
  */
 
 /*
-This benchmark needs split TPC-H lineitem and orders table in csv format with delimiter '|'. The
-lineitem table must be named "lineitem00", "lineitem01", etc. The orders table must be named
-"orders00", "orders01", etc. Each rank will read its corresponding split files. For example, rank 0
-will read "lineitem00" and "orders00"; rank 2 will read "lineitem02" and "orders02".
+This benchmark expects split TPC-H lineitem and orders tables in parquet format. The
+lineitem tables must be named "lineitem00.parquet", "lineitem01.parquet", etc. The orders table must
+be named "orders00.parquet", "orders01.parquet", etc. Each rank will read its corresponding split
+files. For example, rank 0 will read "lineitem00.parquet" and "orders00.parquet"; rank 2 will read
+"lineitem02.parquet" and "orders02.parquet".
+
+To get the split parquet files, we can
+1. Use `tpch-dbgen` to generate TPC-H tables with desired scale factor. See
+   https://github.com/electrum/tpch-dbgen
+2. Split the generated tables, e.g.
+    split -C <size-of-each-split-file> --numeric-suffixes lineitem.tbl lineitem
+3. Convert the split tables to parquet format, e.g.
+    python scripts/tpch_to_parquet.py <path-to-folder-with-split-files>
 
 Parameters:
---data-folder    The forder containing the split files.
+--data-folder    The forder containing the split parquet files.
 --orders         Comma-seperated list of column indices for orders table. Must contain 0.
 --lineitem       Comma-seperated list of column indices for lineitem table. Must contain 0.
 --compression    If specified, compressed data before all-to-all communication.
 
 Example:
 UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc mpirun -n 4 --cpus-per-rank 2 benchmark/tpch
---data-folder <path-to-data-folder> --orders 0,1,2 --lineitem 0,1,2,3 --compression
+--data-folder <path-to-data-folder> --orders O_ORDERKEY --lineitem L_ORDERKEY,L_SHIPDATE,L_SUPPKEY
+--compression
 */
 
 #include "../src/comm.cuh"
@@ -36,7 +46,7 @@ UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc mpirun -n 4 --cpus-per-rank 2 
 #include "../src/topology.cuh"
 
 #include <cudf/column/column_view.hpp>
-#include <cudf/io/csv.hpp>
+#include <cudf/io/parquet.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
@@ -54,17 +64,17 @@ UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc mpirun -n 4 --cpus-per-rank 2 
 #include <vector>
 
 static std::string data_folderpath;
-static std::vector<int> orders_columns;
-static std::vector<int> lineitem_columns;
+static std::vector<std::string> orders_columns;
+static std::vector<std::string> lineitem_columns;
 static bool compression = false;
 
-std::vector<int> split(char *str)
+std::vector<std::string> split(char *str)
 {
-  std::vector<int> split_result;
+  std::vector<std::string> split_result;
   char *ptr = strtok(str, ",");
 
   while (ptr != NULL) {
-    split_result.push_back(atoi(ptr));
+    split_result.emplace_back(ptr);
     ptr = strtok(NULL, ",");
   }
 
@@ -98,12 +108,14 @@ void report_configuration()
   std::cout << std::boolalpha;
   std::cout << "Data folder: " << data_folderpath << std::endl;
   std::cout << "Lineitem columns: ";
-  std::copy(
-    lineitem_columns.begin(), lineitem_columns.end(), std::ostream_iterator<int>(std::cout, " "));
+  std::copy(lineitem_columns.begin(),
+            lineitem_columns.end(),
+            std::ostream_iterator<std::string>(std::cout, " "));
   std::cout << std::endl;
   std::cout << "Orders columns: ";
-  std::copy(
-    orders_columns.begin(), orders_columns.end(), std::ostream_iterator<int>(std::cout, " "));
+  std::copy(orders_columns.begin(),
+            orders_columns.end(),
+            std::ostream_iterator<std::string>(std::cout, " "));
   std::cout << std::endl;
   std::cout << "Compression: " << compression << std::endl;
   std::cout << "================================" << std::endl;
@@ -133,7 +145,7 @@ int main(int argc, char *argv[])
   parse_command_line_arguments(argc, argv);
   report_configuration();
 
-  /* Initialize communicator and memory pool */
+  // Initialize communicator and memory pool
 
   Communicator *communicator{nullptr};
   registered_memory_resource *registered_mr{nullptr};
@@ -142,30 +154,36 @@ int main(int argc, char *argv[])
   setup_memory_pool_and_communicator(
     communicator, registered_mr, pool_mr, "UCX", "preregistered", 0);
 
-  // Read order table
+  void *preallocated_pinned_buffer;
+  CUDA_RT_CALL(
+    cudaMallocHost(&preallocated_pinned_buffer, communicator->mpi_size * sizeof(size_t)));
+
+  // Read input tables
 
   std::stringstream index_string_stream;
   index_string_stream << std::setw(2) << std::setfill('0') << communicator->mpi_rank;
   std::string index_string = index_string_stream.str();
 
-  std::string orders_filepath   = data_folderpath + "/orders" + index_string;
-  std::string lineitem_filepath = data_folderpath + "/lineitem" + index_string;
+  std::string orders_filepath   = data_folderpath + "/orders" + index_string + ".parquet";
+  std::string lineitem_filepath = data_folderpath + "/lineitem" + index_string + ".parquet";
 
-  cudf::io::csv_reader_options orders_options =
-    cudf::io::csv_reader_options::builder(cudf::io::source_info(orders_filepath));
-  orders_options.set_delimiter('|');
-  orders_options.set_use_cols_indexes(orders_columns);
-  orders_options.set_infer_date_indexes({4});
-  auto orders_table = cudf::io::read_csv(orders_options);
+  cudf::io::parquet_reader_options orders_options =
+    cudf::io::parquet_reader_options::builder(cudf::io::source_info(orders_filepath));
+  orders_options.set_columns(orders_columns);
+  auto orders_table = cudf::io::read_parquet(orders_options);
 
-  // Read lineitem table
+  cudf::io::parquet_reader_options lineitem_options =
+    cudf::io::parquet_reader_options::builder(cudf::io::source_info(lineitem_filepath));
+  lineitem_options.set_columns(lineitem_columns);
+  auto lineitem_table = cudf::io::read_parquet(lineitem_options);
 
-  cudf::io::csv_reader_options lineitem_options =
-    cudf::io::csv_reader_options::builder(cudf::io::source_info(lineitem_filepath));
-  lineitem_options.set_delimiter('|');
-  lineitem_options.set_use_cols_indexes(lineitem_columns);
-  lineitem_options.set_infer_date_indexes({10, 11, 12});
-  auto lineitem_table = cudf::io::read_csv(lineitem_options);
+  /*
+  // Print the data types used for the lineitem table for debugging
+  for (cudf::size_type icol = 0; icol < lineitem_table.tbl->view().num_columns(); icol++) {
+    std::cout << (int32_t)lineitem_table.tbl->view().column(icol).type().id() << " ";
+  }
+  std::cout << std::endl;
+  */
 
   // Calculate input sizes
 
@@ -199,7 +217,9 @@ int main(int argc, char *argv[])
                                             {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
                                             communicator,
                                             1,
-                                            compression);
+                                            compression,
+                                            true,
+                                            preallocated_pinned_buffer);
 
   MPI_Barrier(MPI_COMM_WORLD);
   double stop = MPI_Wtime();
@@ -217,6 +237,8 @@ int main(int argc, char *argv[])
   join_result.reset();
   lineitem_table.tbl.reset();
   orders_table.tbl.reset();
+
+  CUDA_RT_CALL(cudaFreeHost(preallocated_pinned_buffer));
 
   destroy_memory_pool_and_communicator(
     communicator, registered_mr, pool_mr, "UCX", "preregistered");
