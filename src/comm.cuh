@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-#ifndef __COMM_CUH
-#define __COMM_CUH
-
-#include <mpi.h>
-#include <cudf/types.hpp>
-#include <vector>
+#pragma once
 
 #include "communicator.h"
 #include "error.cuh"
+
+#include <mpi.h>
+
+#include <numeric>
+#include <vector>
 
 enum COMM_TAGS { placeholder_tag, exchange_size_tag };
 
@@ -61,6 +61,73 @@ MPI_Datatype mpi_dtype_from_c_type()
 }
 
 /**
+ * Communicate number of elements recieved from each rank during all-to-all communication.
+ *
+ * Note: This function needs to be called collectively by all ranks in MPI_COMM_WORLD.
+ *
+ * @param[in] send_offset Vector of length mpi_size + 1 such that `send_offset[i+1] -
+ * send_offset[i]` is the number of elements sent from the current rank to rank i during the
+ * all-to-all communication.
+ * @param[out] recv_offset Vector of length mpi_size + 1 such that `recv_offset[i+1] -
+ * recv_offset[i]` is the number of elements received from rank i during the all-to-all
+ * communication. The vector will be resized in this function and does not need to be preallocated.
+ */
+void communicate_sizes(std::vector<int64_t> const &send_offset,
+                       std::vector<int64_t> &recv_offset,
+                       Communicator *communicator)
+{
+  int mpi_size = communicator->mpi_size;
+  std::vector<int64_t> send_count(mpi_size, -1);
+
+  for (int irank = 0; irank < mpi_size; irank++) {
+    send_count[irank] = send_offset[irank + 1] - send_offset[irank];
+  }
+
+  std::vector<int64_t> recv_count(mpi_size, -1);
+
+  // Note: MPI is used for communicating the sizes instead of *Communicator* because
+  // *Communicator* is not guaranteed to be able to send/recv host buffers.
+
+  std::vector<MPI_Request> send_req(mpi_size);
+  std::vector<MPI_Request> recv_req(mpi_size);
+
+  for (int irank = 0; irank < mpi_size; irank++) {
+    MPI_CALL(MPI_Isend(&send_count[irank],
+                       1,
+                       MPI_INT64_T,
+                       irank,
+                       exchange_size_tag,
+                       MPI_COMM_WORLD,
+                       &send_req[irank]));
+  }
+
+  for (int irank = 0; irank < mpi_size; irank++) {
+    MPI_CALL(MPI_Irecv(&recv_count[irank],
+                       1,
+                       MPI_INT64_T,
+                       irank,
+                       exchange_size_tag,
+                       MPI_COMM_WORLD,
+                       &recv_req[irank]));
+  }
+
+  MPI_CALL(MPI_Waitall(mpi_size, send_req.data(), MPI_STATUSES_IGNORE));
+  MPI_CALL(MPI_Waitall(mpi_size, recv_req.data(), MPI_STATUSES_IGNORE));
+
+  recv_offset.resize(mpi_size + 1, -1);
+  recv_offset[0] = 0;
+  std::partial_sum(recv_count.begin(), recv_count.end(), recv_offset.begin() + 1);
+}
+
+void communicate_sizes(std::vector<cudf::size_type> const &send_offset,
+                       std::vector<int64_t> &recv_offset,
+                       Communicator *communicator)
+{
+  communicate_sizes(
+    std::vector<int64_t>(send_offset.begin(), send_offset.end()), recv_offset, communicator);
+}
+
+/**
  * Send data from the current rank to other ranks according to offset.
  *
  * Note: This call should be enclosed by communicator->start() and communicator->stop().
@@ -96,16 +163,6 @@ void send_data_by_offset(const void *data,
   }
 }
 
-void send_data_by_offset(const void *data,
-                         std::vector<int> const &offset,
-                         size_t item_size,
-                         Communicator *communicator,
-                         bool self_send = true)
-{
-  send_data_by_offset(
-    data, std::vector<int64_t>(offset.begin(), offset.end()), item_size, communicator, self_send);
-}
-
 /**
  * Receive data sent by 'send_data_by_offset'.
  *
@@ -138,5 +195,3 @@ void recv_data_by_offset(void *data,
                        isource_rank);
   }
 }
-
-#endif  // __COMM_CUH

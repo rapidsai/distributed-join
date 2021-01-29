@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef __GENERATE_TABLE_CUH
-#define __GENERATE_TABLE_CUH
+#pragma once
 
 #include <memory>
 #include <stdexcept>
@@ -36,6 +35,26 @@
 #include "error.cuh"
 
 using cudf::table;
+
+struct generate_payload_functor {
+  template <typename T,
+            std::enable_if_t<not cudf::is_timestamp_t<T>::value and
+                             not cudf::is_duration_t<T>::value> * = nullptr>
+  void operator()(T *ptr, cudf::size_type nelements)
+  {
+    thrust::sequence(thrust::device, ptr, ptr + nelements);
+  }
+
+  template <
+    typename T,
+    std::enable_if_t<cudf::is_timestamp_t<T>::value or cudf::is_duration_t<T>::value> * = nullptr>
+  void operator()(T *ptr, cudf::size_type nelements)
+  {
+    thrust::sequence(thrust::device,
+                     reinterpret_cast<typename T::rep *>(ptr),
+                     reinterpret_cast<typename T::rep *>(ptr) + nelements);
+  }
+};
 
 /**
  * Generate a build table and a probe table for testing distributed join.
@@ -72,11 +91,11 @@ std::pair<std::unique_ptr<table>, std::unique_ptr<table>> generate_build_probe_t
 
   build.push_back(cudf::make_numeric_column(key_type, build_table_nrows));
 
-  build.push_back(cudf::make_numeric_column(payload_type, build_table_nrows));
+  build.push_back(cudf::make_fixed_width_column(payload_type, build_table_nrows));
 
   probe.push_back(cudf::make_numeric_column(key_type, probe_table_nrows));
 
-  probe.push_back(cudf::make_numeric_column(payload_type, probe_table_nrows));
+  probe.push_back(cudf::make_fixed_width_column(payload_type, probe_table_nrows));
 
   // Generate build and probe table data
 
@@ -88,11 +107,10 @@ std::pair<std::unique_ptr<table>, std::unique_ptr<table>> generate_build_probe_t
                                                 rand_max,
                                                 uniq_build_tbl_keys);
 
-  auto build_payload_ptr = build[1]->mutable_view().head<PAYLOAD_T>();
-  thrust::sequence(thrust::device, build_payload_ptr, build_payload_ptr + build_table_nrows);
-
-  auto probe_payload_ptr = probe[1]->mutable_view().head<PAYLOAD_T>();
-  thrust::sequence(thrust::device, probe_payload_ptr, probe_payload_ptr + probe_table_nrows);
+  generate_payload_functor{}.operator()<PAYLOAD_T>(build[1]->mutable_view().head<PAYLOAD_T>(),
+                                                   build_table_nrows);
+  generate_payload_functor{}.operator()<PAYLOAD_T>(probe[1]->mutable_view().head<PAYLOAD_T>(),
+                                                   probe_table_nrows);
 
   CUDA_RT_CALL(cudaGetLastError());
   CUDA_RT_CALL(cudaDeviceSynchronize());
@@ -202,14 +220,14 @@ std::pair<std::unique_ptr<table>, std::unique_ptr<table>> generate_tables_distri
 
   vector<std::unique_ptr<column>> build_table_columns;
   for (cudf::size_type icol = 0; icol < pre_shuffle_build_table->num_columns(); icol++) {
-    build_table_columns.push_back(make_numeric_column(
+    build_table_columns.push_back(make_fixed_width_column(
       pre_shuffle_build_table->view().column(icol).type(), build_table_recv_offset.back()));
   }
   std::unique_ptr<table> build_table = std::make_unique<table>(std::move(build_table_columns));
 
   vector<std::unique_ptr<column>> probe_table_columns;
   for (cudf::size_type icol = 0; icol < pre_shuffle_probe_table->num_columns(); icol++) {
-    probe_table_columns.push_back(make_numeric_column(
+    probe_table_columns.push_back(make_fixed_width_column(
       pre_shuffle_probe_table->view().column(icol).type(), probe_table_recv_offset.back()));
   }
   std::unique_ptr<table> probe_table = std::make_unique<table>(std::move(probe_table_columns));
@@ -220,21 +238,25 @@ std::pair<std::unique_ptr<table>, std::unique_ptr<table>> generate_tables_distri
 
   if (communicator->group_by_batch()) communicator->start();
 
-  all_to_all_comm(pre_shuffle_build_table->view(),
-                  build_table->mutable_view(),
-                  build_table_offset,
-                  build_table_recv_offset,
-                  communicator);
+  std::vector<AllToAllCommBuffer> all_to_all_comm_buffers;
 
-  all_to_all_comm(pre_shuffle_probe_table->view(),
-                  probe_table->mutable_view(),
-                  probe_table_offset,
-                  probe_table_recv_offset,
-                  communicator);
+  append_to_all_to_all_comm_buffers(pre_shuffle_build_table->view(),
+                                    build_table->mutable_view(),
+                                    build_table_offset,
+                                    build_table_recv_offset,
+                                    all_to_all_comm_buffers,
+                                    false);
+
+  append_to_all_to_all_comm_buffers(pre_shuffle_probe_table->view(),
+                                    probe_table->mutable_view(),
+                                    probe_table_offset,
+                                    probe_table_recv_offset,
+                                    all_to_all_comm_buffers,
+                                    false);
+
+  all_to_all_comm(all_to_all_comm_buffers, communicator, true);
 
   if (communicator->group_by_batch()) communicator->stop();
 
   return std::make_pair(std::move(build_table), std::move(probe_table));
 }
-
-#endif  // __GENERATE_TABLE_CUH

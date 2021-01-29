@@ -31,7 +31,9 @@ step 2.
 #include <cstdint>
 #include <iostream>
 #include <memory>
+#include <string>
 #include <tuple>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -39,6 +41,7 @@ step 2.
 #include <cudf/sorting.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
+#include <cudf/wrappers/timestamps.hpp>
 #include <rmm/mr/device/per_device_resource.hpp>
 #include <rmm/mr/device/pool_memory_resource.hpp>
 
@@ -51,6 +54,30 @@ step 2.
 #include "../src/topology.cuh"
 
 using cudf::table;
+
+template <typename dtype>
+std::string dtype_to_string()
+{
+  if (std::is_same<dtype, int32_t>::value) {
+    return "int32_t";
+  } else if (std::is_same<dtype, int64_t>::value) {
+    return "int64_t";
+  } else if (std::is_same<dtype, cudf::timestamp_D>::value) {
+    return "timestamp_D";
+  } else if (std::is_same<dtype, cudf::timestamp_ms>::value) {
+    return "timestamp_ms";
+  } else if (std::is_same<dtype, cudf::timestamp_ns>::value) {
+    return "timestamp_ns";
+  } else if (std::is_same<dtype, cudf::duration_D>::value) {
+    return "duration_D";
+  } else if (std::is_same<dtype, cudf::duration_s>::value) {
+    return "duration_s";
+  } else if (std::is_same<dtype, cudf::duration_us>::value) {
+    return "duration_us";
+  } else {
+    return "unknown_t";
+  }
+}
 
 template <typename data_type>
 __global__ void verify_correctness(const data_type *data1,
@@ -162,9 +189,11 @@ void run_test(cudf::size_type build_table_size,
 
     CUDA_RT_CALL(cudaDeviceSynchronize());
 
-    std::cerr << "Test case (" << build_table_size << "," << probe_table_size << "," << selectivity
-              << "," << is_build_table_key_unique << "," << over_decomposition_factor << ","
-              << compression << ") passes successfully.\n";
+    std::cerr << std::boolalpha;
+    std::cerr << "Test case (" << dtype_to_string<KEY_T>() << "," << dtype_to_string<PAYLOAD_T>()
+              << "," << build_table_size << "," << probe_table_size << "," << selectivity << ","
+              << is_build_table_key_unique << "," << over_decomposition_factor << "," << compression
+              << ") passes successfully.\n";
   }
 }
 
@@ -207,6 +236,18 @@ int main(int argc, char *argv[])
   run_test<int32_t, int32_t>(1'000'000, 5'000'000, 0.3, true, 1, true, communicator);
   run_test<int64_t, int64_t>(1'000'000, 5'000'000, 0.3, true, 1, false, communicator);
   run_test<int64_t, int64_t>(1'000'000, 5'000'000, 0.3, true, 1, true, communicator);
+  run_test<int64_t, cudf::timestamp_D>(1'000'000, 1'000'000, 0.3, true, 1, false, communicator);
+  run_test<int64_t, cudf::timestamp_D>(1'000'000, 1'000'000, 0.3, true, 1, true, communicator);
+  run_test<int64_t, cudf::timestamp_ms>(1'000'000, 1'000'000, 0.3, true, 1, false, communicator);
+  run_test<int64_t, cudf::timestamp_ms>(1'000'000, 1'000'000, 0.3, true, 1, true, communicator);
+  run_test<int64_t, cudf::timestamp_ns>(1'000'000, 1'000'000, 0.3, true, 1, false, communicator);
+  run_test<int64_t, cudf::timestamp_ns>(1'000'000, 1'000'000, 0.3, true, 1, true, communicator);
+  run_test<int64_t, cudf::duration_D>(1'000'000, 1'000'000, 0.3, true, 1, false, communicator);
+  run_test<int64_t, cudf::duration_D>(1'000'000, 1'000'000, 0.3, true, 1, true, communicator);
+  run_test<int64_t, cudf::duration_s>(1'000'000, 1'000'000, 0.3, true, 1, false, communicator);
+  run_test<int64_t, cudf::duration_s>(1'000'000, 1'000'000, 0.3, true, 1, true, communicator);
+  run_test<int64_t, cudf::duration_us>(1'000'000, 1'000'000, 0.3, true, 1, false, communicator);
+  run_test<int64_t, cudf::duration_us>(1'000'000, 1'000'000, 0.3, true, 1, true, communicator);
 
   /* Cleanup */
 

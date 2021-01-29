@@ -17,9 +17,9 @@ CFLAGS=-g -std=c++14 ${NCCL_CFLAGS} ${MPI_CFLAGS} ${CUDA_CFLAGS} ${UCX_CFLAGS} $
 LDFLAGS=${NCCL_LIBS} ${MPI_LIBS} ${CUDA_LIBS} ${UCX_LIBS} ${CUDF_LIBS} ${NVCOMP_LIBS}
 
 generate_dataset=generate_dataset/generate_dataset.cuh generate_dataset/nvtx_helper.cuh
-src=src/comm.cuh src/error.cuh src/distribute_table.cuh src/distributed_join.cuh src/generate_table.cuh src/communicator.o src/registered_memory_resource.hpp
+src=src/comm.cuh src/error.cuh src/distribute_table.cuh src/distributed_join.cuh src/generate_table.cuh src/communicator.o src/registered_memory_resource.hpp src/strings_column.cuh
 
-all: benchmark/distributed_join benchmark/all_to_all test/compare_against_single_gpu test/prebuild test/buffer_communicator
+all: benchmark/distributed_join benchmark/all_to_all test/compare_against_single_gpu test/prebuild test/buffer_communicator test/string_payload
 
 benchmark/distributed_join: benchmark/distributed_join.cu $(generate_dataset) $(src)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o benchmark/distributed_join benchmark/distributed_join.cu src/communicator.o
@@ -35,6 +35,9 @@ test/prebuild: test/prebuild.cu $(src)
 
 test/buffer_communicator: test/buffer_communicator.cu $(src)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o test/buffer_communicator test/buffer_communicator.cu src/communicator.o
+
+test/string_payload: test/string_payload.cu $(src)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o test/string_payload test/string_payload.cu src/communicator.o
 
 src/communicator.o: src/communicator.h src/communicator.cu
 	$(CC) $(CFLAGS) $(LDFLAGS) -o src/communicator.o -c src/communicator.cu

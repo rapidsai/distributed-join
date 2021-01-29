@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#pragma once
+
 #include "error.cuh"
 #include "registered_memory_resource.hpp"
 
