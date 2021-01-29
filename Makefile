@@ -17,7 +17,7 @@ CFLAGS=-g -std=c++14 ${NCCL_CFLAGS} ${MPI_CFLAGS} ${CUDA_CFLAGS} ${UCX_CFLAGS} $
 LDFLAGS=${NCCL_LIBS} ${MPI_LIBS} ${CUDA_LIBS} ${UCX_LIBS} ${CUDF_LIBS} ${NVCOMP_LIBS}
 
 generate_dataset=generate_dataset/generate_dataset.cuh generate_dataset/nvtx_helper.cuh
-src=src/comm.cuh src/error.cuh src/distribute_table.cuh src/distributed_join.cuh src/generate_table.cuh src/communicator.o src/registered_memory_resource.hpp
+src=src/comm.cuh src/error.cuh src/distribute_table.cuh src/distributed_join.cuh src/generate_table.cuh src/communicator.o src/registered_memory_resource.hpp src/strings_column.cuh
 
 all: benchmark/distributed_join benchmark/all_to_all benchmark/tpch test/compare_against_single_gpu test/prebuild test/buffer_communicator test/string_payload
 
