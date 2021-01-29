@@ -240,19 +240,19 @@ std::pair<std::unique_ptr<table>, std::unique_ptr<table>> generate_tables_distri
 
   std::vector<AllToAllCommBuffer> all_to_all_comm_buffers;
 
-  preprocess_all_to_all_comm(pre_shuffle_build_table->view(),
-                             build_table->mutable_view(),
-                             build_table_offset,
-                             build_table_recv_offset,
-                             all_to_all_comm_buffers,
-                             false);
+  append_to_all_to_all_comm_buffers(pre_shuffle_build_table->view(),
+                                    build_table->mutable_view(),
+                                    build_table_offset,
+                                    build_table_recv_offset,
+                                    all_to_all_comm_buffers,
+                                    false);
 
-  preprocess_all_to_all_comm(pre_shuffle_probe_table->view(),
-                             probe_table->mutable_view(),
-                             probe_table_offset,
-                             probe_table_recv_offset,
-                             all_to_all_comm_buffers,
-                             false);
+  append_to_all_to_all_comm_buffers(pre_shuffle_probe_table->view(),
+                                    probe_table->mutable_view(),
+                                    probe_table_offset,
+                                    probe_table_recv_offset,
+                                    all_to_all_comm_buffers,
+                                    false);
 
   all_to_all_comm(all_to_all_comm_buffers, communicator, true);
 
