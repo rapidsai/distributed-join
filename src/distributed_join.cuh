@@ -52,6 +52,8 @@
 #include <rmm/mr/device/device_memory_resource.hpp>
 #include <rmm/mr/device/per_device_resource.hpp>
 
+#include <simt/type_traits>
+
 #include "comm.cuh"
 #include "communicator.h"
 #include "error.cuh"
@@ -81,6 +83,8 @@ struct AllToAllCommBuffer {
   cudf::data_type dtype;
   // the compression method used
   CompressionMethod compression_method;
+  // cascaded compression format
+  nvcompCascadedFormatOpts cascaded_format;
   // compressed `send_buffer` to be all-to-all communicated
   rmm::device_buffer compressed_send_buffer;
   // the receive buffer for the compressed data
@@ -97,13 +101,15 @@ struct AllToAllCommBuffer {
                      std::vector<int64_t> send_offsets,
                      std::vector<int64_t> recv_offsets,
                      cudf::data_type dtype,
-                     CompressionMethod compression_method)
+                     CompressionMethod compression_method,
+                     nvcompCascadedFormatOpts cascaded_format)
     : send_buffer(send_buffer),
       recv_buffer(recv_buffer),
       send_offsets(send_offsets),
       recv_offsets(recv_offsets),
       dtype(dtype),
-      compression_method(compression_method)
+      compression_method(compression_method),
+      cascaded_format(cascaded_format)
   {
   }
 };
@@ -127,7 +133,8 @@ struct compression_functor {
                   std::vector<cudf::size_type> const &uncompressed_counts,
                   std::vector<rmm::device_buffer> &compressed_data,
                   size_t *compressed_sizes,
-                  std::vector<rmm::cuda_stream_view> const &streams)
+                  std::vector<rmm::cuda_stream_view> const &streams,
+                  nvcompCascadedFormatOpts cascaded_format)
   {
     size_t npartitions = uncompressed_counts.size();
     compressed_data.resize(npartitions);
@@ -144,9 +151,9 @@ struct compression_functor {
       nvcomp::CascadedCompressor<T> compressor(
         static_cast<const T *>(uncompressed_data[ipartition]),
         uncompressed_counts[ipartition],
-        1,
-        1,
-        true);
+        cascaded_format.num_RLEs,
+        cascaded_format.num_deltas,
+        cascaded_format.use_bp);
 
       temp_sizes[ipartition]  = compressor.get_temp_size();
       temp_spaces[ipartition] = rmm::device_buffer(temp_sizes[ipartition], streams[ipartition]);
@@ -162,9 +169,9 @@ struct compression_functor {
       nvcomp::CascadedCompressor<T> compressor(
         static_cast<const T *>(uncompressed_data[ipartition]),
         uncompressed_counts[ipartition],
-        1,
-        1,
-        true);
+        cascaded_format.num_RLEs,
+        cascaded_format.num_deltas,
+        cascaded_format.use_bp);
 
       // Set the output buffer to 0 to get away a bug in nvcomp
       CUDA_RT_CALL(cudaMemsetAsync(compressed_data[ipartition].data(),
@@ -187,11 +194,16 @@ struct compression_functor {
                   std::vector<cudf::size_type> const &uncompressed_counts,
                   std::vector<rmm::device_buffer> &compressed_data,
                   size_t *compressed_sizes,
-                  std::vector<rmm::cuda_stream_view> const &streams)
+                  std::vector<rmm::cuda_stream_view> const &streams,
+                  nvcompCascadedFormatOpts cascaded_format)
   {
     // If the data type is duration or time, use the corresponding arithmetic type
-    operator()<typename T::rep>(
-      uncompressed_data, uncompressed_counts, compressed_data, compressed_sizes, streams);
+    operator()<typename T::rep>(uncompressed_data,
+                                uncompressed_counts,
+                                compressed_data,
+                                compressed_sizes,
+                                streams,
+                                cascaded_format);
   }
 };
 
@@ -266,6 +278,52 @@ struct decompression_functor {
     // If the data type is duration or time, use the corresponding arithmetic type
     operator()<typename T::rep>(
       compressed_data, compressed_sizes, outputs, expected_output_counts, streams);
+  }
+};
+
+template <typename T>
+using is_cascaded_supported = simt::std::disjunction<std::is_same<int8_t, T>,
+                                                     std::is_same<uint8_t, T>,
+                                                     std::is_same<int16_t, T>,
+                                                     std::is_same<uint16_t, T>,
+                                                     std::is_same<int32_t, T>,
+                                                     std::is_same<uint32_t, T>,
+                                                     std::is_same<int64_t, T>,
+                                                     std::is_same<uint64_t, T>>;
+
+struct cascaded_selector_functor {
+  template <typename T, std::enable_if_t<is_cascaded_supported<T>::value> * = nullptr>
+  nvcompCascadedFormatOpts operator()(const void *uncompressed_data, size_t byte_len)
+  {
+    nvcompCascadedSelectorOpts selector_opts;
+    selector_opts.sample_size = 1024;
+    selector_opts.num_samples = 100;
+
+    nvcomp::CascadedSelector<T> selector(uncompressed_data, byte_len, selector_opts);
+
+    size_t temp_bytes = selector.get_temp_size();
+    rmm::device_buffer temp_space(temp_bytes);
+
+    double estimate_ratio;
+    return selector.select_config(temp_space.data(), temp_bytes, &estimate_ratio, 0);
+  }
+
+  template <
+    typename T,
+    std::enable_if_t<cudf::is_timestamp_t<T>::value || cudf::is_duration_t<T>::value> * = nullptr>
+  nvcompCascadedFormatOpts operator()(const void *uncompressed_data, size_t byte_len)
+  {
+    // If the data type is duration or time, use the corresponding arithmetic type
+    return operator()<typename T::rep>(uncompressed_data, byte_len);
+  }
+
+  template <typename T,
+            std::enable_if_t<!is_cascaded_supported<T>::value && !cudf::is_timestamp_t<T>::value &&
+                             !cudf::is_duration_t<T>::value> * = nullptr>
+  nvcompCascadedFormatOpts operator()(const void *uncompressed_data, size_t byte_len)
+  {
+    throw std::runtime_error("Unsupported type for CascadedSelector");
+    return nvcompCascadedFormatOpts();
   }
 };
 
@@ -498,13 +556,20 @@ void append_to_all_to_all_comm_buffers(
 
     if (dtype.id() != cudf::type_id::STRING) {
       // This is a fixed-width column
+      nvcompCascadedFormatOpts opts =
+        cudf::type_dispatcher(dtype,
+                              cascaded_selector_functor{},
+                              input.column(icol).head(),
+                              input.column(icol).size() * cudf::size_of(dtype));
+
       all_to_all_comm_buffers.emplace_back(
         input.column(icol).head(),
         output.column(icol).head(),
         std::vector<int64_t>(send_offsets.begin(), send_offsets.end()),
         recv_offsets,
         dtype,
-        compression_method);
+        compression_method,
+        opts);
     } else {
       // This is a string column
       all_to_all_comm_buffers.emplace_back(
@@ -513,7 +578,12 @@ void append_to_all_to_all_comm_buffers(
         std::vector<int64_t>(send_offsets.begin(), send_offsets.end()),
         recv_offsets,
         input.column(icol).child(0).type(),
-        compression_method);
+        compression_method,
+        cudf::type_dispatcher(
+          input.column(icol).child(0).type(),
+          cascaded_selector_functor{},
+          string_sizes_send[icol].data(),
+          send_offsets.back() * cudf::size_of(input.column(icol).child(0).type())));
 
       all_to_all_comm_buffers.emplace_back(
         input.column(icol).child(1).head(),
@@ -521,7 +591,12 @@ void append_to_all_to_all_comm_buffers(
         std::vector<int64_t>(string_send_offsets[icol].begin(), string_send_offsets[icol].end()),
         string_recv_offsets[icol],
         input.column(icol).child(1).type(),
-        compression_method);
+        compression_method,
+        cudf::type_dispatcher(
+          input.column(icol).child(1).type(),
+          cascaded_selector_functor{},
+          string_sizes_send[icol].data(),
+          string_send_offsets[icol].back() * cudf::size_of(input.column(icol).child(1).type())));
     }
   }
 }
@@ -654,7 +729,8 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
                           uncompressed_counts,
                           compressed_buffers,
                           compressed_buffer_sizes_pinned,
-                          compression_stream_views);
+                          compression_stream_views,
+                          buffer.cascaded_format);
 
     for (auto &stream : compression_streams) stream.synchronize();
 
@@ -1125,11 +1201,14 @@ void warmup_nvcomp()
   std::vector<rmm::device_buffer> compressed_data(1);
   size_t compressed_size;
 
+  nvcompCascadedFormatOpts cascaded_format = {.num_RLEs = 1, .num_deltas = 1, .use_bp = 1};
+
   compression_functor{}.operator()<int>({input_data.data()},
                                         {warmup_size},
                                         compressed_data,
                                         &compressed_size,
-                                        {rmm::cuda_stream_default});
+                                        {rmm::cuda_stream_default},
+                                        cascaded_format);
 
   rmm::device_buffer decompressed_data(warmup_size * sizeof(int));
 
