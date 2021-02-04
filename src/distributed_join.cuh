@@ -68,6 +68,7 @@ using std::chrono::milliseconds;
 
 enum class CompressionMethod { none, cascaded, lz4 };
 
+/* A structure outlining how to compress a column */
 struct ColumnCompressionOptions {
   CompressionMethod compression_method;
   nvcompCascadedFormatOpts cascaded_format;
@@ -320,6 +321,14 @@ using is_cascaded_supported = simt::std::disjunction<std::is_same<int8_t, T>,
                                                      std::is_same<uint64_t, T>>;
 
 struct cascaded_selector_functor {
+  /**
+   * Generate cascaded compression configuration options using auto-selector.
+   *
+   * @param[in] uncompressed_data Data used by auto-selector.
+   * @param[in] byte_len Number of bytes in *uncompressed_data*.
+   *
+   * @returns Cascaded compression configuration options for *uncompressed_data*.
+   */
   template <typename T, std::enable_if_t<is_cascaded_supported<T>::value> * = nullptr>
   nvcompCascadedFormatOpts operator()(const void *uncompressed_data, size_t byte_len)
   {
@@ -355,6 +364,14 @@ struct cascaded_selector_functor {
   }
 };
 
+/**
+ * Generate compression options using auto selector.
+ *
+ * @param[in] input_table Table for which to generate compression options.
+ *
+ * @returns Vector of length equal to number of columns in *input_table*, where each element
+ * representing the compression options for each column.
+ */
 std::vector<ColumnCompressionOptions> generate_auto_select_compression_options(
   cudf::table_view input_table)
 {
@@ -394,6 +411,14 @@ std::vector<ColumnCompressionOptions> generate_auto_select_compression_options(
   return compression_options;
 }
 
+/**
+ * Generate compression options that no compression should be performed.
+ *
+ * @param[in] input_table Table for which to generate compression options.
+ *
+ * @returns Vector of length equal to number of columns in *input_table*, where each element
+ * representing the compression options for each column.
+ */
 std::vector<ColumnCompressionOptions> generate_none_compression_options(
   cudf::table_view input_table)
 {
@@ -416,8 +441,20 @@ std::vector<ColumnCompressionOptions> generate_none_compression_options(
   return compression_options;
 }
 
-ColumnCompressionOptions distribute_compression_options(cudf::column_view input_column,
-                                                        ColumnCompressionOptions input_options)
+/**
+ * Broadcast the compression options of a column from the root rank to all ranks.
+ *
+ * Note: This function needs to be called collectively by all ranks in MPI_COMM_WORLD.
+ *
+ * @param[in] input_column Column which *input_options* is associated with. This argument is
+ * significant on all ranks.
+ * @param[in] input_options Compression options associated with *input_column* that needs to be
+ * broadcasted. This argument is only significant on the root rank.
+ *
+ * @returns Broadcasted compression options on all ranks.
+ */
+ColumnCompressionOptions broadcast_compression_options(cudf::column_view input_column,
+                                                       ColumnCompressionOptions input_options)
 {
   int mpi_rank;
   MPI_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank));
@@ -438,19 +475,33 @@ ColumnCompressionOptions distribute_compression_options(cudf::column_view input_
     // offset subcolumn
     if (mpi_rank == 0) { compression_options = input_options.children_compression_options[0]; }
     children_compression_options.push_back(
-      distribute_compression_options(input_column.child(0), compression_options));
+      broadcast_compression_options(input_column.child(0), compression_options));
 
     // char subcolumn
     if (mpi_rank == 0) { compression_options = input_options.children_compression_options[1]; }
     children_compression_options.push_back(
-      distribute_compression_options(input_column.child(1), compression_options));
+      broadcast_compression_options(input_column.child(1), compression_options));
   }
 
   return ColumnCompressionOptions(
     compression_method, cascaded_format, children_compression_options);
 }
 
-std::vector<ColumnCompressionOptions> distribute_compression_options(
+/**
+ * Broadcast the compression options of a table from the root rank to all ranks.
+ *
+ * Note: This function needs to be called collectively by all ranks in MPI_COMM_WORLD.
+ *
+ * @param[in] input_table Table which *input_options* is associated with. This argument is
+ * significant on all ranks.
+ * @param[in] input_options Vector of lenght equal to the number of columns in *input_table*,
+ * representing compression options associated with *input_table* that needs to be
+ * broadcasted. Each element represents the compression option of one column in *input_table*. This
+ * argument is only significant on the root rank.
+ *
+ * @returns Broadcasted compression options on all ranks.
+ */
+std::vector<ColumnCompressionOptions> broadcast_compression_options(
   cudf::table_view input_table, std::vector<ColumnCompressionOptions> input_options)
 {
   int mpi_rank;
@@ -463,12 +514,25 @@ std::vector<ColumnCompressionOptions> distribute_compression_options(
     if (mpi_rank == 0) { input_options_icol = input_options[icol]; }
 
     output_options.push_back(
-      distribute_compression_options(input_table.column(icol), input_options_icol));
+      broadcast_compression_options(input_table.column(icol), input_options_icol));
   }
 
   return output_options;
 }
 
+/**
+ * Generate the same compression option on all ranks.
+ *
+ * Note: This function needs to be called collectively by all ranks in MPI_COMM_WORLD.
+ *
+ * @param[in] input_table Table to generate compression options on. This argument is significant on
+ * all ranks.
+ * @param[in] compression Whether to use compression. If *true*, the compression options will be
+ * generated by auto selector on the root rank. If *false*, compression options indicating no
+ * compression will be generated.
+ *
+ * @returns Compression options for *input_table* on all ranks.
+ */
 std::vector<ColumnCompressionOptions> generate_compression_options_distributed(
   cudf::table_view input_table, bool compression)
 {
@@ -482,7 +546,7 @@ std::vector<ColumnCompressionOptions> generate_compression_options_distributed(
     compression_options = generate_auto_select_compression_options(input_table);
   }
 
-  compression_options = distribute_compression_options(input_table, compression_options);
+  compression_options = broadcast_compression_options(input_table, compression_options);
 
   return compression_options;
 }
@@ -694,6 +758,8 @@ void copy_to_self(cudf::table_view input_table,
  * allocating the buffers.
  * @param[out] all_to_all_comm_buffers Each element in this vector represents a buffer that needs to
  * be all-to-all communicated.
+ * @param[in] compression_options Vector of length equal to the number of columns in *input*,
+ * indicating whether/how each column needs to be compressed before communication.
  */
 void append_to_all_to_all_comm_buffers(
   cudf::table_view input,
@@ -1042,6 +1108,11 @@ void postprocess_all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buf
  * an output column will be produced.  For each of these pairs (L, R), L
  * should exist in `left_on` and R should exist in `right_on`.
  * @param[in] communicator An instance of `Communicator` used for communication.
+ * @param[in] left_compression_options Vector of length equal to the number of columns in *left*,
+ * indicating whether/how each column of the left table needs to be compressed before communication.
+ * @param[in] right_compression_options Vector of length equal to the number of columns in *right*,
+ * indicating whether/how each column of the right table needs to be compressed before
+ * communication.
  * @param[in] over_decom_factor Over-decomposition factor used for overlapping computation and
  * communication.
  * @param[in] report_timing Whether collect and print timing.
