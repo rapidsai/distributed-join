@@ -98,14 +98,22 @@ void run_test(cudf::size_type nelements_per_gpu, bool compression, Communicator 
   std::unique_ptr<cudf::table> right_table =
     generate_table(nelements_per_gpu, nelements_per_gpu * mpi_rank * 5, 5);
 
+  /* Generate compression options */
+
+  std::vector<ColumnCompressionOptions> left_compression_options =
+    generate_compression_options_distributed(left_table->view(), compression);
+  std::vector<ColumnCompressionOptions> right_compression_options =
+    generate_compression_options_distributed(right_table->view(), compression);
+
   auto join_result = distributed_inner_join(left_table->view(),
                                             right_table->view(),
                                             {0},
                                             {0},
                                             {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
                                             communicator,
-                                            1,
-                                            compression);
+                                            left_compression_options,
+                                            right_compression_options,
+                                            1);
 
   int num_rows = join_result->num_rows();
   int total_nrows;
@@ -147,8 +155,13 @@ int main(int argc, char *argv[])
 
   /* Run tests */
 
-  run_test(12'000, true, communicator);
+  // Note: temporarily disable some test cases because nvcomp's cascaded selector can raise
+  // "Floating point exception" if the input buffer is smaller than sample_size * num_samples.
+
+  // run_test(12'000, true, communicator);
   run_test(12'000, false, communicator);
+  run_test(120'000, true, communicator);
+  run_test(120'000, false, communicator);
 
   /* Cleanup */
 

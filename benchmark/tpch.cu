@@ -204,6 +204,13 @@ int main(int argc, char *argv[])
 
   if (compression) { warmup_nvcomp(); }
 
+  // Generate compression options
+
+  std::vector<ColumnCompressionOptions> orders_compression_options =
+    generate_compression_options_distributed(orders_table.tbl->view(), compression);
+  std::vector<ColumnCompressionOptions> lineitem_compression_options =
+    generate_compression_options_distributed(lineitem_table.tbl->view(), compression);
+
   // Perform distributed join
 
   CUDA_RT_CALL(cudaDeviceSynchronize());
@@ -216,8 +223,9 @@ int main(int argc, char *argv[])
                                             {0},
                                             {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
                                             communicator,
+                                            orders_compression_options,
+                                            lineitem_compression_options,
                                             1,
-                                            compression,
                                             true,
                                             preallocated_pinned_buffer);
 

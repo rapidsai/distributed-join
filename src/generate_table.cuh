@@ -234,6 +234,13 @@ std::pair<std::unique_ptr<table>, std::unique_ptr<table>> generate_tables_distri
 
   CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
 
+  // Set compression options to none
+
+  std::vector<ColumnCompressionOptions> build_compression_options =
+    generate_none_compression_options(pre_shuffle_build_table->view());
+  std::vector<ColumnCompressionOptions> probe_compression_options =
+    generate_none_compression_options(pre_shuffle_probe_table->view());
+
   // Send each bucket to the desired target rank
 
   if (communicator->group_by_batch()) communicator->start();
@@ -245,14 +252,14 @@ std::pair<std::unique_ptr<table>, std::unique_ptr<table>> generate_tables_distri
                                     build_table_offset,
                                     build_table_recv_offset,
                                     all_to_all_comm_buffers,
-                                    false);
+                                    build_compression_options);
 
   append_to_all_to_all_comm_buffers(pre_shuffle_probe_table->view(),
                                     probe_table->mutable_view(),
                                     probe_table_offset,
                                     probe_table_recv_offset,
                                     all_to_all_comm_buffers,
-                                    false);
+                                    probe_compression_options);
 
   all_to_all_comm(all_to_all_comm_buffers, communicator, true);
 

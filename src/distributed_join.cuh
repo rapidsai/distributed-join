@@ -68,6 +68,34 @@ using std::chrono::milliseconds;
 
 enum class CompressionMethod { none, cascaded, lz4 };
 
+struct ColumnCompressionOptions {
+  CompressionMethod compression_method;
+  nvcompCascadedFormatOpts cascaded_format;
+  std::vector<ColumnCompressionOptions> children_compression_options;
+
+  ColumnCompressionOptions() = default;
+
+  ColumnCompressionOptions(CompressionMethod compression_method)
+    : compression_method(compression_method)
+  {
+  }
+
+  ColumnCompressionOptions(CompressionMethod compression_method,
+                           nvcompCascadedFormatOpts cascaded_format)
+    : compression_method(compression_method), cascaded_format(cascaded_format)
+  {
+  }
+
+  ColumnCompressionOptions(CompressionMethod compression_method,
+                           nvcompCascadedFormatOpts cascaded_format,
+                           std::vector<ColumnCompressionOptions> children_compression_options)
+    : compression_method(compression_method),
+      cascaded_format(cascaded_format),
+      children_compression_options(children_compression_options)
+  {
+  }
+};
+
 struct AllToAllCommBuffer {
   // the buffer to be all-to-all communicated
   const void *send_buffer;
@@ -327,6 +355,138 @@ struct cascaded_selector_functor {
   }
 };
 
+std::vector<ColumnCompressionOptions> generate_auto_select_compression_options(
+  cudf::table_view input_table)
+{
+  std::vector<ColumnCompressionOptions> compression_options;
+
+  for (cudf::size_type icol = 0; icol < input_table.num_columns(); icol++) {
+    cudf::column_view input_column = input_table.column(icol);
+    cudf::data_type dtype          = input_column.type();
+    if (dtype.id() == cudf::type_id::STRING) {
+      std::vector<ColumnCompressionOptions> children_options;
+
+      // offset subcolumn
+      cudf::data_type offset_dtype = input_column.child(0).type();
+      nvcompCascadedFormatOpts offset_cascaded_opts =
+        cudf::type_dispatcher(offset_dtype,
+                              cascaded_selector_functor{},
+                              input_column.child(0).head(),
+                              input_column.child(0).size() * cudf::size_of(offset_dtype));
+      children_options.emplace_back(CompressionMethod::cascaded, offset_cascaded_opts);
+
+      // do not compress char subcolumn
+      children_options.emplace_back(CompressionMethod::none);
+
+      compression_options.emplace_back(
+        CompressionMethod::none, nvcompCascadedFormatOpts(), children_options);
+    } else {
+      nvcompCascadedFormatOpts column_cascaded_opts =
+        cudf::type_dispatcher(dtype,
+                              cascaded_selector_functor{},
+                              input_column.head(),
+                              input_column.size() * cudf::size_of(dtype));
+
+      compression_options.emplace_back(CompressionMethod::cascaded, column_cascaded_opts);
+    }
+  }
+
+  return compression_options;
+}
+
+std::vector<ColumnCompressionOptions> generate_none_compression_options(
+  cudf::table_view input_table)
+{
+  std::vector<ColumnCompressionOptions> compression_options;
+
+  for (cudf::size_type icol = 0; icol < input_table.num_columns(); icol++) {
+    if (input_table.column(icol).type().id() == cudf::type_id::STRING) {
+      std::vector<ColumnCompressionOptions> children_options;
+      // offset subcolumn
+      children_options.emplace_back(CompressionMethod::none);
+      // char subcolumn
+      children_options.emplace_back(CompressionMethod::none);
+      compression_options.emplace_back(
+        CompressionMethod::none, nvcompCascadedFormatOpts(), children_options);
+    } else {
+      compression_options.emplace_back(CompressionMethod::none);
+    }
+  }
+
+  return compression_options;
+}
+
+ColumnCompressionOptions distribute_compression_options(cudf::column_view input_column,
+                                                        ColumnCompressionOptions input_options)
+{
+  int mpi_rank;
+  MPI_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank));
+
+  cudf::data_type dtype = input_column.type();
+
+  CompressionMethod compression_method     = input_options.compression_method;
+  nvcompCascadedFormatOpts cascaded_format = input_options.cascaded_format;
+  std::vector<ColumnCompressionOptions> children_compression_options;
+
+  MPI_CALL(MPI_Bcast(&compression_method, sizeof(CompressionMethod), MPI_CHAR, 0, MPI_COMM_WORLD));
+  MPI_CALL(
+    MPI_Bcast(&cascaded_format, sizeof(nvcompCascadedFormatOpts), MPI_CHAR, 0, MPI_COMM_WORLD));
+
+  if (dtype.id() == cudf::type_id::STRING) {
+    ColumnCompressionOptions compression_options;
+
+    // offset subcolumn
+    if (mpi_rank == 0) { compression_options = input_options.children_compression_options[0]; }
+    children_compression_options.push_back(
+      distribute_compression_options(input_column.child(0), compression_options));
+
+    // char subcolumn
+    if (mpi_rank == 0) { compression_options = input_options.children_compression_options[1]; }
+    children_compression_options.push_back(
+      distribute_compression_options(input_column.child(1), compression_options));
+  }
+
+  return ColumnCompressionOptions(
+    compression_method, cascaded_format, children_compression_options);
+}
+
+std::vector<ColumnCompressionOptions> distribute_compression_options(
+  cudf::table_view input_table, std::vector<ColumnCompressionOptions> input_options)
+{
+  int mpi_rank;
+  MPI_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank));
+
+  std::vector<ColumnCompressionOptions> output_options;
+
+  for (cudf::size_type icol = 0; icol < input_table.num_columns(); icol++) {
+    ColumnCompressionOptions input_options_icol;
+    if (mpi_rank == 0) { input_options_icol = input_options[icol]; }
+
+    output_options.push_back(
+      distribute_compression_options(input_table.column(icol), input_options_icol));
+  }
+
+  return output_options;
+}
+
+std::vector<ColumnCompressionOptions> generate_compression_options_distributed(
+  cudf::table_view input_table, bool compression)
+{
+  if (!compression) { return generate_none_compression_options(input_table); }
+
+  int mpi_rank;
+  MPI_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank));
+
+  std::vector<ColumnCompressionOptions> compression_options;
+  if (mpi_rank == 0) {
+    compression_options = generate_auto_select_compression_options(input_table);
+  }
+
+  compression_options = distribute_compression_options(input_table, compression_options);
+
+  return compression_options;
+}
+
 /**
  * Local join thread used for merging incoming partitions and performing local joins.
  *
@@ -545,31 +705,22 @@ void append_to_all_to_all_comm_buffers(
   vector<rmm::device_uvector<cudf::size_type>> const &string_sizes_send,
   vector<rmm::device_uvector<cudf::size_type>> &string_sizes_recv,
   vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
-  bool compression)
+  vector<ColumnCompressionOptions> const &compression_options)
 {
   for (cudf::size_type icol = 0; icol < input.num_columns(); icol++) {
     cudf::data_type dtype = input.column(icol).type();
     assert(dtype == output.column(icol).type());
 
-    CompressionMethod compression_method = CompressionMethod::none;
-    if (compression) { compression_method = CompressionMethod::cascaded; }
-
     if (dtype.id() != cudf::type_id::STRING) {
       // This is a fixed-width column
-      nvcompCascadedFormatOpts opts =
-        cudf::type_dispatcher(dtype,
-                              cascaded_selector_functor{},
-                              input.column(icol).head(),
-                              input.column(icol).size() * cudf::size_of(dtype));
-
       all_to_all_comm_buffers.emplace_back(
         input.column(icol).head(),
         output.column(icol).head(),
         std::vector<int64_t>(send_offsets.begin(), send_offsets.end()),
         recv_offsets,
         dtype,
-        compression_method,
-        opts);
+        compression_options[icol].compression_method,
+        compression_options[icol].cascaded_format);
     } else {
       // This is a string column
       all_to_all_comm_buffers.emplace_back(
@@ -578,12 +729,8 @@ void append_to_all_to_all_comm_buffers(
         std::vector<int64_t>(send_offsets.begin(), send_offsets.end()),
         recv_offsets,
         input.column(icol).child(0).type(),
-        compression_method,
-        cudf::type_dispatcher(
-          input.column(icol).child(0).type(),
-          cascaded_selector_functor{},
-          string_sizes_send[icol].data(),
-          send_offsets.back() * cudf::size_of(input.column(icol).child(0).type())));
+        compression_options[icol].children_compression_options[0].compression_method,
+        compression_options[icol].children_compression_options[0].cascaded_format);
 
       all_to_all_comm_buffers.emplace_back(
         input.column(icol).child(1).head(),
@@ -591,12 +738,8 @@ void append_to_all_to_all_comm_buffers(
         std::vector<int64_t>(string_send_offsets[icol].begin(), string_send_offsets[icol].end()),
         string_recv_offsets[icol],
         input.column(icol).child(1).type(),
-        compression_method,
-        cudf::type_dispatcher(
-          input.column(icol).child(1).type(),
-          cascaded_selector_functor{},
-          string_sizes_send[icol].data(),
-          string_send_offsets[icol].back() * cudf::size_of(input.column(icol).child(1).type())));
+        compression_options[icol].children_compression_options[1].compression_method,
+        compression_options[icol].children_compression_options[1].cascaded_format);
     }
   }
 }
@@ -606,7 +749,7 @@ void append_to_all_to_all_comm_buffers(cudf::table_view input,
                                        vector<cudf::size_type> const &send_offsets,
                                        vector<int64_t> const &recv_offsets,
                                        vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
-                                       bool compression)
+                                       vector<ColumnCompressionOptions> compression_options)
 {
   // Without string columns, `string_sizes_recv` is not needed. This is only a placeholder passed to
   // `append_to_all_to_all_comm_buffers`.
@@ -621,7 +764,7 @@ void append_to_all_to_all_comm_buffers(cudf::table_view input,
                                     vector<rmm::device_uvector<cudf::size_type>>(),
                                     string_sizes_recv,
                                     all_to_all_comm_buffers,
-                                    compression);
+                                    compression_options);
 }
 
 /**
@@ -916,8 +1059,9 @@ std::unique_ptr<table> distributed_inner_join(
   vector<cudf::size_type> const &right_on,
   vector<std::pair<cudf::size_type, cudf::size_type>> const &columns_in_common,
   Communicator *communicator,
+  vector<ColumnCompressionOptions> left_compression_options,
+  vector<ColumnCompressionOptions> right_compression_options,
   int over_decom_factor            = 1,
-  bool compression                 = false,
   bool report_timing               = false,
   void *preallocated_pinned_buffer = nullptr)
 {
@@ -1130,7 +1274,7 @@ std::unique_ptr<table> distributed_inner_join(
       string_sizes_send_left,
       string_sizes_recv_left[ibatch],
       all_to_all_comm_buffers,
-      compression);
+      left_compression_options);
 
     append_to_all_to_all_comm_buffers(
       hashed_right->view(),
@@ -1142,7 +1286,7 @@ std::unique_ptr<table> distributed_inner_join(
       string_sizes_send_right,
       string_sizes_recv_right[ibatch],
       all_to_all_comm_buffers,
-      compression);
+      right_compression_options);
 
     // all-to-all communication for the ibatch
     if (communicator->group_by_batch()) communicator->start();

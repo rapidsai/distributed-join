@@ -131,6 +131,13 @@ void run_test(cudf::size_type build_table_size,
   std::unique_ptr<table> local_build = distribute_table(build_view, communicator);
   std::unique_ptr<table> local_probe = distribute_table(probe_view, communicator);
 
+  /* Generate compression options */
+
+  std::vector<ColumnCompressionOptions> build_compression_options =
+    generate_compression_options_distributed(local_build->view(), compression);
+  std::vector<ColumnCompressionOptions> probe_compression_options =
+    generate_compression_options_distributed(local_probe->view(), compression);
+
   /* Distributed join */
 
   std::unique_ptr<table> join_result_all_ranks =
@@ -140,8 +147,9 @@ void run_test(cudf::size_type build_table_size,
                            {0},
                            {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
                            communicator,
-                           over_decomposition_factor,
-                           compression);
+                           build_compression_options,
+                           probe_compression_options,
+                           over_decomposition_factor);
 
   /* Send join result from all ranks to the root rank */
 

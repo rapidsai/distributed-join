@@ -193,6 +193,13 @@ int main(int argc, char *argv[])
     throw std::runtime_error("Unknown key type");
   }
 
+  /* Generate compression options */
+
+  std::vector<ColumnCompressionOptions> left_compression_options =
+    generate_compression_options_distributed(left->view(), COMPRESSION);
+  std::vector<ColumnCompressionOptions> right_compression_options =
+    generate_compression_options_distributed(right->view(), COMPRESSION);
+
   /* Distributed join */
 
   CUDA_RT_CALL(cudaDeviceSynchronize());
@@ -208,8 +215,9 @@ int main(int argc, char *argv[])
                            {0},
                            {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
                            communicator,
+                           left_compression_options,
+                           right_compression_options,
                            OVER_DECOMPOSITION_FACTOR,
-                           COMPRESSION,
                            false,
                            preallocated_pinned_buffer);
 
