@@ -27,7 +27,7 @@
 
 #include "../src/communicator.h"
 #include "../src/error.cuh"
-#include "../src/topology.cuh"
+#include "../src/setup.cuh"
 
 static int REPEAT                           = 4;
 static std::string COMMUNICATOR_NAME        = "UCX";
@@ -149,9 +149,8 @@ void run_all_to_all(int64_t size,
 
 int main(int argc, char *argv[])
 {
-  /* Initialize topology */
-
-  setup_topology(argc, argv);
+  MPI_CALL(MPI_Init(&argc, &argv));
+  set_cuda_device();
 
   int mpi_rank;
   int mpi_size;

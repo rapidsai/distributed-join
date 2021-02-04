@@ -26,7 +26,7 @@
 
 #include "../src/communicator.h"
 #include "../src/error.cuh"
-#include "../src/topology.cuh"
+#include "../src/setup.cuh"
 
 static int64_t COUNT = 50'000'000LL;
 
@@ -59,9 +59,8 @@ __global__ void test_correctness(uint64_t *start_addr, uint64_t size, uint64_t s
 
 int main(int argc, char *argv[])
 {
-  /* Initialize topology */
-
-  setup_topology(argc, argv);
+  MPI_CALL(MPI_Init(&argc, &argv));
+  set_cuda_device();
 
   /* Parse command line arguments */
 
@@ -142,6 +141,8 @@ int main(int argc, char *argv[])
   delete communicator;
 
   if (mpi_rank == 0) { std::cerr << "Test case \"buffer_communicator\" passes successfully.\n"; }
+
+  MPI_CALL(MPI_Finalize());
 
   return 0;
 }

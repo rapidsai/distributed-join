@@ -38,7 +38,7 @@
 #include "../src/error.cuh"
 #include "../src/generate_table.cuh"
 #include "../src/registered_memory_resource.hpp"
-#include "../src/topology.cuh"
+#include "../src/setup.cuh"
 
 static std::string key_type     = "int64_t";
 static std::string payload_type = "int64_t";
@@ -116,9 +116,8 @@ void report_configuration()
 
 int main(int argc, char *argv[])
 {
-  /* Initialize topology */
-
-  setup_topology(argc, argv);
+  MPI_CALL(MPI_Init(&argc, &argv));
+  set_cuda_device();
 
   /* Parse command line arguments */
 

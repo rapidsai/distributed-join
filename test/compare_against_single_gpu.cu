@@ -51,7 +51,7 @@ step 2.
 #include "../src/error.cuh"
 #include "../src/generate_table.cuh"
 #include "../src/registered_memory_resource.hpp"
-#include "../src/topology.cuh"
+#include "../src/setup.cuh"
 
 using cudf::table;
 
@@ -207,9 +207,8 @@ void run_test(cudf::size_type build_table_size,
 
 int main(int argc, char *argv[])
 {
-  /* Initialize topology */
-
-  setup_topology(argc, argv);
+  MPI_CALL(MPI_Init(&argc, &argv));
+  set_cuda_device();
 
   /* Initialize communicator */
 
@@ -217,9 +216,7 @@ int main(int argc, char *argv[])
 
   /* Initialize memory pool */
 
-  size_t free_memory, total_memory;
-  CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
-  const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
+  const size_t pool_size = 960'000'000;  // 960MB
 
   registered_memory_resource mr(communicator);
   auto *pool_mr =
@@ -262,6 +259,8 @@ int main(int argc, char *argv[])
   delete pool_mr;
   communicator->finalize();
   delete communicator;
+
+  MPI_CALL(MPI_Finalize());
 
   return 0;
 }

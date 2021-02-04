@@ -26,14 +26,12 @@
 
 #include <iostream>
 
-void setup_topology(int argc, char *argv[])
+void set_cuda_device()
 {
-  int device_count;
   int mpi_rank;
-
-  MPI_CALL(MPI_Init(&argc, &argv));
   MPI_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank));
 
+  int device_count;
   CUDA_RT_CALL(cudaGetDeviceCount(&device_count));
   std::cout << "Device count: " << device_count << std::endl;
 

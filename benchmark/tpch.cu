@@ -43,7 +43,7 @@ UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc mpirun -n 4 --cpus-per-rank 2 
 
 #include "../src/comm.cuh"
 #include "../src/distributed_join.cuh"
-#include "../src/topology.cuh"
+#include "../src/setup.cuh"
 
 #include <cudf/column/column_view.hpp>
 #include <cudf/io/parquet.hpp>
@@ -141,7 +141,9 @@ int64_t calculate_table_size(cudf::table_view input_table)
 
 int main(int argc, char *argv[])
 {
-  setup_topology(argc, argv);
+  MPI_CALL(MPI_Init(&argc, &argv));
+  set_cuda_device();
+
   parse_command_line_arguments(argc, argv);
   report_configuration();
 

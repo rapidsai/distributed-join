@@ -35,7 +35,7 @@
 #include "../src/distribute_table.cuh"
 #include "../src/distributed_join.cuh"
 #include "../src/error.cuh"
-#include "../src/topology.cuh"
+#include "../src/setup.cuh"
 
 using cudf::table;
 
@@ -156,15 +156,12 @@ void run_test(cudf::size_type size,  // must be a multiple of 5
 
 int main(int argc, char *argv[])
 {
-  /* Initialize topology */
-
-  setup_topology(argc, argv);
+  MPI_CALL(MPI_Init(&argc, &argv));
+  set_cuda_device();
 
   /* Initialize memory pool */
 
-  size_t free_memory, total_memory;
-  CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
-  const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
+  const size_t pool_size = 960'000'000;  // 960MB
 
   rmm::mr::device_memory_resource *mr = rmm::mr::get_current_device_resource();
   rmm::mr::pool_memory_resource<rmm::mr::device_memory_resource> pool_mr{mr, pool_size, pool_size};
@@ -196,6 +193,8 @@ int main(int argc, char *argv[])
 
   communicator->finalize();
   delete communicator;
+
+  MPI_CALL(MPI_Finalize());
 
   return 0;
 }

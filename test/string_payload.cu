@@ -17,7 +17,7 @@
 #include "../src/communicator.h"
 #include "../src/distributed_join.cuh"
 #include "../src/error.cuh"
-#include "../src/topology.cuh"
+#include "../src/setup.cuh"
 
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -140,9 +140,8 @@ void run_test(cudf::size_type nelements_per_gpu, bool compression, Communicator 
 
 int main(int argc, char *argv[])
 {
-  /* Initialize topology */
-
-  setup_topology(argc, argv);
+  MPI_CALL(MPI_Init(&argc, &argv));
+  set_cuda_device();
 
   /* Setup memory pool */
 
@@ -167,6 +166,8 @@ int main(int argc, char *argv[])
 
   communicator->finalize();
   delete communicator;
+
+  MPI_CALL(MPI_Finalize());
 
   return 0;
 }
