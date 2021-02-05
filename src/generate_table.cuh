@@ -31,6 +31,7 @@
 #include <cudf/utilities/type_dispatcher.hpp>
 
 #include "../generate_dataset/generate_dataset.cuh"
+#include "compression.hpp"
 #include "distributed_join.cuh"
 #include "error.cuh"
 
