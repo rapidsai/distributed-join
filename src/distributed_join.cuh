@@ -27,6 +27,11 @@
 #include <vector>
 
 #include <mpi.h>
+#include <rmm/thrust_rmm_allocator.h>
+#include <thrust/adjacent_difference.h>
+#include <thrust/device_vector.h>
+#include <thrust/gather.h>
+#include <thrust/scan.h>
 #include <cascaded.hpp>
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_factories.hpp>
@@ -122,6 +127,11 @@ struct compression_functor {
                   rmm::device_buffer &compressed_data,
                   size_t &compressed_size)
   {
+    if (uncompressed_count == 0) {
+      compressed_size = 0;
+      return;
+    }
+
     nvcomp::CascadedCompressor<T> compressor(
       static_cast<const T *>(uncompressed_data), uncompressed_count, 1, 1, true);
 
@@ -162,7 +172,6 @@ struct decompressor_functor {
    * @param[in] compressed_size Size of *compressed_data* in bytes.
    * @param[out] output Decompressed output. This argument needs to be preallocated.
    * @param[out] expected_output_count Expected number of elements in the decompressed buffer.
-   * This argument is only used for error checking purposes.
    */
   template <
     typename T,
@@ -172,6 +181,8 @@ struct decompressor_functor {
                   void *output,
                   size_t expected_output_count)
   {
+    if (expected_output_count == 0) return;
+
     nvcomp::Decompressor<T> decompressor(compressed_data, compressed_size, cudaStreamDefault);
     const size_t output_count = decompressor.get_num_elements();
     assert(output_count == expected_output_count);
@@ -203,13 +214,13 @@ struct decompressor_functor {
  * @param[in] communicated_left Left table after all-to-all communication.
  * @param[in] communicated_right Right table after all-to-all communication.
  * @param[out] batch_join_results Inner join result of each batch.
- * @param[in] left_on Column indices from the left table to join on. This argument will be passed
- *     directly *cudf::inner_join*.
+ * @param[in] left_on Column indices from the left table to join on. This argument will be
+ * passed directly *cudf::inner_join*.
  * @param[in] right_on Column indices from the right table to join on. This argument will be
  * passed directly *cudf::inner_join*.
  * @param[in] columns_in_common Vector of pairs of column indices from the left and right table
- * that are in common and only one column will be produced in *batch_join_results*. This argument
- *     will be passed directly *cudf::inner_join*.
+ * that are in common and only one column will be produced in *batch_join_results*. This
+ * argument will be passed directly *cudf::inner_join*.
  * @param[in] flags *flags[i]* is true if and only if the ith batch has finished the all-to-all
  *     communication.
  * @param[in] report_timing Whether to print the local join time to stderr.
@@ -240,7 +251,7 @@ void inner_join_func(vector<std::unique_ptr<table>> &communicated_left,
 
     if (communicated_left[ibatch]->num_rows() && communicated_right[ibatch]->num_rows()) {
       // Perform local join only when both left and right tables are not empty.
-      // If either is empty, the local join will return the other table, which is not desired.
+      // If either is empty, cuDF's inner join will return the other table, which is not desired.
       batch_join_results[ibatch] = cudf::inner_join(communicated_left[ibatch]->view(),
                                                     communicated_right[ibatch]->view(),
                                                     left_on,
@@ -253,7 +264,7 @@ void inner_join_func(vector<std::unique_ptr<table>> &communicated_left,
     if (report_timing) {
       stop_time     = high_resolution_clock::now();
       auto duration = duration_cast<milliseconds>(stop_time - start_time);
-      std::cerr << "Rank " << communicator->mpi_rank << ": Local join on batch " << ibatch
+      std::cout << "Rank " << communicator->mpi_rank << ": Local join on batch " << ibatch
                 << " takes " << duration.count() << "ms" << std::endl;
     }
   }
@@ -493,10 +504,17 @@ void append_to_all_to_all_comm_buffers(cudf::table_view input,
  */
 void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
                      Communicator *communicator,
-                     bool include_self = true)
+                     bool include_self  = true,
+                     bool report_timing = false)
 {
   int mpi_rank = communicator->mpi_rank;
   int mpi_size = communicator->mpi_size;
+
+  double start_time;
+  double stop_time;
+  double total_compression_time  = 0.0;
+  double total_uncompressed_size = 0.0;
+  double total_compressed_size   = 0.0;
 
   for (auto &buffer : all_to_all_comm_buffers) {
     if (buffer.compression_method == CompressionMethod::none) {
@@ -522,6 +540,16 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
     // If the code reaches here, the buffer will be compressed before communication
     assert(buffer.compression_method == CompressionMethod::cascaded);
 
+    // General strategy of all-to-all with compression:
+    // The all-to-all interface works on a single buffer with offsets. Since we don't know the
+    // compressed size without actually doing the compression, we cannot pre-allocate this buffer
+    // beforehand. Instead we compress each partition in the send buffer separately. Once the
+    // compression is done, we can allocate the compressed send buffer and copy the compressed data
+    // into the buffer. The all-to-all communication can reuse the `send_data_by_offset` and
+    // `recv_data_by_offset` functions.
+
+    if (report_timing) { start_time = MPI_Wtime(); }
+
     // Compress each partition in the send buffer separately and store the result in
     // `compressed_buffers`
     vector<rmm::device_buffer> compressed_buffers(mpi_size);
@@ -545,6 +573,13 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
     for (int irank = 0; irank < mpi_size; irank++) {
       buffer.compressed_send_offsets[irank + 1] =
         buffer.compressed_send_offsets[irank] + compressed_buffer_sizes[irank];
+    }
+
+    if (report_timing) {
+      stop_time = MPI_Wtime();
+      total_compression_time += (stop_time - start_time);
+      total_uncompressed_size += (buffer.send_offsets.back() * cudf::size_of(buffer.dtype));
+      total_compressed_size += buffer.compressed_send_offsets.back();
     }
 
     communicate_sizes(buffer.compressed_send_offsets, buffer.compressed_recv_offsets, communicator);
@@ -581,6 +616,14 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
 
     if (!communicator->group_by_batch()) communicator->stop();
   }
+
+  if (report_timing) {
+    std::cout << "Rank " << mpi_rank << ": compression takes " << total_compression_time * 1e3
+              << "ms"
+              << " with compression ratio " << total_uncompressed_size / total_compressed_size
+              << " and throughput " << total_uncompressed_size / total_compression_time / 1e9
+              << "GB/s" << std::endl;
+  }
 }
 
 /**
@@ -590,10 +633,16 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
  */
 void postprocess_all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
                                  Communicator *communicator,
-                                 bool include_self = true)
+                                 bool include_self  = true,
+                                 bool report_timing = false)
 {
   int mpi_rank = communicator->mpi_rank;
   int mpi_size = communicator->mpi_size;
+  double start_time;
+  double stop_time;
+  double total_uncompressed_size = 0.0;
+
+  if (report_timing) { start_time = MPI_Wtime(); }
 
   // Decompress compressed data into destination buffer
   for (auto &buffer : all_to_all_comm_buffers) {
@@ -612,6 +661,17 @@ void postprocess_all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buf
           buffer.recv_offsets[irank] * cudf::size_of(buffer.dtype),
         buffer.recv_offsets[irank + 1] - buffer.recv_offsets[irank]);
     }
+
+    if (report_timing)
+      total_uncompressed_size += (buffer.recv_offsets.back() * cudf::size_of(buffer.dtype));
+  }
+
+  if (report_timing) {
+    stop_time       = MPI_Wtime();
+    double duration = stop_time - start_time;
+    std::cout << "Rank " << mpi_rank << ": decompression takes " << duration * 1e3 << "ms"
+              << " with throughput " << total_uncompressed_size / duration / 1e9 << "GB/s"
+              << std::endl;
   }
 }
 
@@ -696,7 +756,7 @@ std::unique_ptr<table> distributed_inner_join(
   if (report_timing) {
     stop_time     = high_resolution_clock::now();
     auto duration = duration_cast<milliseconds>(stop_time - start_time);
-    std::cerr << "Rank " << mpi_rank << ": Hash partition takes " << duration.count() << "ms"
+    std::cout << "Rank " << mpi_rank << ": Hash partition takes " << duration.count() << "ms"
               << std::endl;
   }
 
@@ -886,11 +946,11 @@ std::unique_ptr<table> distributed_inner_join(
     // all-to-all communication for the ibatch
     if (communicator->group_by_batch()) communicator->start();
 
-    all_to_all_comm(all_to_all_comm_buffers, communicator, false);
+    all_to_all_comm(all_to_all_comm_buffers, communicator, false, report_timing);
 
     if (communicator->group_by_batch()) communicator->stop();
 
-    postprocess_all_to_all_comm(all_to_all_comm_buffers, communicator, false);
+    postprocess_all_to_all_comm(all_to_all_comm_buffers, communicator, false, report_timing);
 
     calculate_string_offsets_from_sizes(communicated_left[ibatch]->mutable_view(),
                                         string_sizes_recv_left[ibatch]);
@@ -904,7 +964,7 @@ std::unique_ptr<table> distributed_inner_join(
     if (report_timing) {
       stop_time     = high_resolution_clock::now();
       auto duration = duration_cast<milliseconds>(stop_time - start_time);
-      std::cerr << "Rank " << mpi_rank << ": All-to-all communication on batch " << ibatch
+      std::cout << "Rank " << mpi_rank << ": All-to-all communication on batch " << ibatch
                 << " takes " << duration.count() << "ms" << std::endl;
     }
   }
