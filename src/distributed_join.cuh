@@ -533,6 +533,7 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
 
     // Allocate receive buffer and launch all-to-all communication on the compressed buffer
     buffer.compressed_recv_buffer.resize(buffer.compressed_recv_offsets.back());
+    CUDA_RT_CALL(cudaStreamSynchronize(0));
 
     if (!communicator->group_by_batch()) communicator->start();
 
