@@ -1,8 +1,8 @@
-FROM nvidia/cuda:11.0-devel-ubuntu18.04
+FROM nvidia/cuda:11.0-devel-ubuntu20.04
 ARG DEBIAN_FRONTEND=noninteractive
-ENV CUDA_HOME=/usr/local/cuda
+ENV CUDA_ROOT=/usr/local/cuda
 
-RUN apt-get update -y && apt-get install -y build-essential wget cmake git vim
+RUN apt-get update -y && apt-get install -y build-essential wget git vim
 
 # Install conda
 ADD https://repo.continuum.io/miniconda/Miniconda3-latest-Linux-x86_64.sh /miniconda.sh
@@ -15,15 +15,18 @@ SHELL ["/bin/bash", "-c"]
 WORKDIR /root
 RUN conda create --name cudf_release \
     && source activate cudf_release \
-    && conda install -c rapidsai-nightly -c nvidia -c conda-forge -c defaults -y \
+    && conda install -c rapidsai -c nvidia -c conda-forge -c defaults -y \
         cudf=0.17 \
         python=3.8 \
         cudatoolkit=11.0 \
         nccl \
+        openmpi \
+        cmake \
     && conda clean -a -y
-ENV CUDF_HOME=/conda/envs/cudf_release
-ENV NCCL_HOME=${CUDF_HOME}
-ENV LD_LIBRARY_PATH=${CUDF_HOME}/lib:${LD_LIBRARY_PATH}
+ENV CUDF_ROOT=/conda/envs/cudf_release
+ENV NCCL_ROOT=${CUDF_ROOT}
+ENV LD_LIBRARY_PATH=${CUDA_ROOT}/lib64:${CUDF_ROOT}/lib:${LD_LIBRARY_PATH}
+ENV PATH=${PATH}:/conda/envs/cudf_release/bin
 
 # Setup Mellanox OFED
 WORKDIR /root
@@ -56,15 +59,11 @@ RUN apt-get install -y numactl libnuma-dev file pkg-config binutils binutils-dev
     && make -j \
     && make install \
     && cd /root && rm -rf ucx-1.9.0 && rm ucx-1.9.0.tar.gz
-ENV UCX_HOME=/usr
+ENV UCX_ROOT=/usr
 
-# Setup MPI
+# Setup nvcomp
 WORKDIR /root
-ADD https://download.open-mpi.org/release/open-mpi/v4.0/openmpi-4.0.5.tar.gz .
-RUN apt-get install -y numactl libnuma-dev \
-    && tar -zxf openmpi-4.0.5.tar.gz \
-    && cd openmpi-4.0.5 && ./configure --prefix=/opt/openmpi-4.0.5 && make -j && make install \
-    && cd /root && rm -rf openmpi-4.0.5 && rm openmpi-4.0.5.tar.gz
-ENV MPI_HOME=/opt/openmpi-4.0.5
-ENV PATH=${MPI_HOME}/bin:${PATH}
-ENV LD_LIBRARY_PATH=${MPI_HOME}/lib:${LD_LIBRARY_PATH}
+RUN git clone https://github.com/NVIDIA/nvcomp && cd nvcomp && mkdir -p build && cd build \
+    && /conda/envs/cudf_release/bin/cmake .. && make -j
+ENV NVCOMP_ROOT=/root/nvcomp/build
+ENV LD_LIBRARY_PATH=${NVCOMP_ROOT}/lib:${LD_LIBRARY_PATH}
