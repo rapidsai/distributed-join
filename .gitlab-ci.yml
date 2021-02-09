@@ -1,18 +1,18 @@
-image: nvidia/cuda:11.0-devel-ubuntu18.04
+image: nvidia/cuda:11.0-devel-ubuntu20.04
 
 variables:
-  CUDA_HOME: "/usr/local/cuda"
-  CUDF_HOME: "/conda/envs/join"
-  UCX_HOME: "/conda/envs/join"
-  NCCL_HOME: "/conda/envs/join"
-  MPI_HOME: "/conda/envs/join"
-  NVCOMP_HOME: "/root/nvcomp/build"
+  CUDA_ROOT: "/usr/local/cuda"
+  CUDF_ROOT: "/conda/envs/join"
+  UCX_ROOT: "/conda/envs/join"
+  NCCL_ROOT: "/conda/envs/join"
+  MPI_ROOT: "/conda/envs/join"
+  NVCOMP_ROOT: "/root/nvcomp/build"
 
 TITAN V:
   script:
     - bash ci/install-dependencies.sh
     - export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CUDF_HOME/lib:$NVCOMP_HOME/lib
-    - make -j
-    - UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc /conda/envs/join/bin/mpirun --allow-run-as-root --oversubscribe -n 4 --cpus-per-rank 2 test/compare_against_single_gpu
-    - UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc /conda/envs/join/bin/mpirun --allow-run-as-root --oversubscribe -n 4 --cpus-per-rank 2 test/prebuild
-    - UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc /conda/envs/join/bin/mpirun --allow-run-as-root --oversubscribe -n 4 --cpus-per-rank 2 test/string_payload
+    - mkdir build && cd build && cmake .. && make -j
+    - UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc /conda/envs/join/bin/mpirun --allow-run-as-root --oversubscribe -n 4 --cpus-per-rank 2 bin/test/compare_against_single_gpu
+    - UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc /conda/envs/join/bin/mpirun --allow-run-as-root --oversubscribe -n 4 --cpus-per-rank 2 bin/test/prebuild
+    - UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc /conda/envs/join/bin/mpirun --allow-run-as-root --oversubscribe -n 4 --cpus-per-rank 2 bin/test/string_payload
