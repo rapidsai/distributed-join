@@ -22,6 +22,7 @@ find_library(UCP_LIBRARY NAMES ucp)
 include(${CMAKE_ROOT}/Modules/FindPackageHandleStandardArgs.cmake)
 find_package_handle_standard_args(UCX DEFAULT_MSG UCX_INCLUDE_DIR UCS_LIBRARY UCT_LIBRARY UCP_LIBRARY)
 
+set(UCX_INCLUDE_DIRS ${UCX_INCLUDE_DIR})
 set(UCX_LIBRARIES ${UCS_LIBRARY} ${UCT_LIBRARY} ${UCP_LIBRARY})
 
 if (UCX_FOUND)

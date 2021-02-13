@@ -41,9 +41,9 @@ UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc mpirun -n 4 --cpus-per-rank 2 
 --compression
 */
 
-#include "../src/comm.cuh"
+#include "../src/comm.hpp"
 #include "../src/distributed_join.cuh"
-#include "../src/setup.cuh"
+#include "../src/setup.hpp"
 
 #include <cudf/column/column_view.hpp>
 #include <cudf/io/parquet.hpp>
@@ -52,6 +52,8 @@ UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc mpirun -n 4 --cpus-per-rank 2 
 #include <cudf/types.hpp>
 
 #include <mpi.h>
+
+#include <cuda_runtime.h>
 
 #include <algorithm>
 #include <cassert>

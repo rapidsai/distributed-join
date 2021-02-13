@@ -19,6 +19,9 @@
 #include <mpi.h>
 #include <nccl.h>
 #include <ucp/api/ucp.h>
+
+#include <cuda_runtime.h>
+
 #include <cstdint>
 #include <queue>
 #include <vector>

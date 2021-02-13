@@ -131,15 +131,15 @@ Elasped time (s) 0.431553
 
 ```
 benchmark/
-    all_to_all.cu               Benchmark the throughput of all-to-all communications.
+    all_to_all.cpp              Benchmark the throughput of all-to-all communications.
     distributed_join.cu         Benchmark the throughput of distributed join.
 src/
-    topology.cuh                Initialize MPI and set CUDA devices.
-    comm.cuh                    Communication related helper functions.
-    communicator.cu             Different implementations for the common send/recv interface definced in the header file.
+    comm.hpp                    Communication related helper functions.
+    communicator.cpp            Different implementations for the common send/recv interface definced in the header file.
     distributed_join.cuh        Distributed join and all-to-all communication implementation.
-    distribute_table.cuh        Table distribution/collection between the root rank and all worker ranks.
-    error.cuh                   Error checking macros.
+    distribute_table.cpp        Table distribution/collection between the root rank and all worker ranks.
+    error.hpp                   Error checking macros.
+    setup.hpp                   Set CUDA devices and initialize memory pool.
 test/
     buffer_communicator.cu          Test the correctness of the buffer communicator.
     compare_against_single_gpu.cu   Test the correctness of the distributed-join compared to single-GPU implementation on random tables.

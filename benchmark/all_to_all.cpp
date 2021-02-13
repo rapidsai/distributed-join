@@ -14,20 +14,24 @@
  * limitations under the License.
  */
 
-#include <cuda_profiler_api.h>
-#include <mpi.h>
-#include <cstdint>
-#include <iostream>
+#include "../src/communicator.hpp"
+#include "../src/error.hpp"
+#include "../src/setup.hpp"
+
 #include <rmm/mr/device/device_memory_resource.hpp>
 #include <rmm/mr/device/per_device_resource.hpp>
 #include <rmm/mr/device/pool_memory_resource.hpp>
+
+#include <cuda_profiler_api.h>
+#include <cuda_runtime.h>
+
+#include <mpi.h>
+
+#include <cstdint>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
-
-#include "../src/communicator.h"
-#include "../src/error.cuh"
-#include "../src/setup.cuh"
 
 static int REPEAT                           = 4;
 static std::string COMMUNICATOR_NAME        = "UCX";

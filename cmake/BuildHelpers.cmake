@@ -30,6 +30,7 @@ function(include_and_link_dependencies target_name)
   target_link_libraries(${target_name} PUBLIC ${NVCOMP_LIBRARIES})
   target_link_libraries(${target_name} PUBLIC MPI::MPI_CXX)
   target_link_libraries(${target_name} PUBLIC ${CUDF_LIBRARIES})
+  target_link_libraries(${target_name} PUBLIC CUDA::cudart)
 
   target_compile_options(${target_name} PUBLIC $<$<COMPILE_LANGUAGE:CUDA>:--expt-extended-lambda>)
   target_compile_options(${target_name} PUBLIC $<$<COMPILE_LANGUAGE:CUDA>:--default-stream per-thread>)

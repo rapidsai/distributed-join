@@ -16,24 +16,25 @@
 
 #pragma once
 
-#include <memory>
-#include <stdexcept>
-#include <tuple>
-#include <utility>
-#include <vector>
+#include "../generate_dataset/generate_dataset.cuh"
+#include "compression.hpp"
+#include "distributed_join.cuh"
+#include "error.hpp"
 
-#include <thrust/execution_policy.h>
-#include <thrust/sequence.h>
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
 #include <cudf/utilities/type_dispatcher.hpp>
 
-#include "../generate_dataset/generate_dataset.cuh"
-#include "compression.hpp"
-#include "distributed_join.cuh"
-#include "error.cuh"
+#include <thrust/execution_policy.h>
+#include <thrust/sequence.h>
+
+#include <memory>
+#include <stdexcept>
+#include <tuple>
+#include <utility>
+#include <vector>
 
 using cudf::table;
 

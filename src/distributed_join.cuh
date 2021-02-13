@@ -16,10 +16,10 @@
 
 #pragma once
 
-#include "comm.cuh"
-#include "communicator.h"
+#include "comm.hpp"
+#include "communicator.hpp"
 #include "compression.hpp"
-#include "error.cuh"
+#include "error.hpp"
 #include "strings_column.cuh"
 
 #include <cudf/column/column.hpp>

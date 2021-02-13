@@ -14,14 +14,12 @@
  * limitations under the License.
  */
 
-#include <mpi.h>
-#include <cassert>
-#include <iostream>
-#include <memory>
-#include <vector>
+#include "../src/communicator.hpp"
+#include "../src/distribute_table.hpp"
+#include "../src/distributed_join.cuh"
+#include "../src/error.hpp"
+#include "../src/setup.hpp"
 
-#include <thrust/execution_policy.h>
-#include <thrust/sequence.h>
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_factories.hpp>
 #include <cudf/join.hpp>
@@ -31,11 +29,15 @@
 #include <rmm/mr/device/per_device_resource.hpp>
 #include <rmm/mr/device/pool_memory_resource.hpp>
 
-#include "../src/communicator.h"
-#include "../src/distribute_table.cuh"
-#include "../src/distributed_join.cuh"
-#include "../src/error.cuh"
-#include "../src/setup.cuh"
+#include <thrust/execution_policy.h>
+#include <thrust/sequence.h>
+
+#include <mpi.h>
+
+#include <cassert>
+#include <iostream>
+#include <memory>
+#include <vector>
 
 using cudf::table;
 
@@ -187,6 +189,7 @@ int main(int argc, char *argv[])
   // run_test(300'000, 1, true, communicator);
   run_test(300'000, 4, false, communicator);
   // run_test(300'000, 4, true, communicator);
+  run_test(3'000'000, 1, true, communicator);
   run_test(3'000'000, 4, true, communicator);
 
   /* Cleanup */

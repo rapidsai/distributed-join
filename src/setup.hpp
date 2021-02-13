@@ -16,13 +16,15 @@
 
 #pragma once
 
-#include "error.cuh"
+#include "error.hpp"
 #include "registered_memory_resource.hpp"
 
 #include <rmm/mr/device/per_device_resource.hpp>
 #include <rmm/mr/device/pool_memory_resource.hpp>
 
 #include <mpi.h>
+
+#include <cuda_runtime.h>
 
 #include <iostream>
 

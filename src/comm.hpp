@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include "communicator.h"
-#include "error.cuh"
+#include "communicator.hpp"
+#include "error.hpp"
 
 #include <cudf/types.hpp>
 #include <rmm/cuda_stream_view.hpp>
@@ -25,6 +25,8 @@
 #include <rmm/mr/device/per_device_resource.hpp>
 
 #include <mpi.h>
+
+#include <cuda_runtime.h>
 
 #include <numeric>
 #include <vector>

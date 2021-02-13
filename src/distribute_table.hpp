@@ -25,9 +25,11 @@
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
 
-#include "comm.cuh"
-#include "communicator.h"
-#include "error.cuh"
+#include <cuda_runtime.h>
+
+#include "comm.hpp"
+#include "communicator.hpp"
+#include "error.hpp"
 
 /**
  * Helper function for calculating the number of rows of a local table.

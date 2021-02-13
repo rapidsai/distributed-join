@@ -16,9 +16,9 @@
 
 #pragma once
 
-#include "comm.cuh"
-#include "communicator.h"
-#include "error.cuh"
+#include "comm.hpp"
+#include "communicator.hpp"
+#include "error.hpp"
 
 #include <rmm/thrust_rmm_allocator.h>
 #include <cudf/table/table_view.hpp>
@@ -162,7 +162,7 @@ void calculate_string_offsets_from_sizes(
       thrust::device_ptr<cudf::size_type>(
         static_cast<cudf::size_type *>(output_column.child(0).head())) +
         1);
-    CUDA_TRY(cudaMemsetAsync(output_column.child(0).head(), 0, sizeof(cudf::size_type), 0));
+    CUDA_RT_CALL(cudaMemsetAsync(output_column.child(0).head(), 0, sizeof(cudf::size_type), 0));
   }
 }
 

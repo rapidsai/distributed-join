@@ -18,11 +18,15 @@
 
 #pragma once
 
-#include <map>
+#include "communicator.hpp"
+
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/detail/error.hpp>
 #include <rmm/mr/device/device_memory_resource.hpp>
-#include "communicator.h"
+
+#include <cuda_runtime.h>
+
+#include <map>
 
 /**
  * @brief `device_memory_resource` derived class that uses cudaMalloc/Free for

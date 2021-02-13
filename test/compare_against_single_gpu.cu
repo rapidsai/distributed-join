@@ -28,14 +28,13 @@ Specifically, it follows the following steps:
 step 2.
 */
 
-#include <cstdint>
-#include <iostream>
-#include <memory>
-#include <string>
-#include <tuple>
-#include <type_traits>
-#include <utility>
-#include <vector>
+#include "../src/communicator.hpp"
+#include "../src/distribute_table.hpp"
+#include "../src/distributed_join.cuh"
+#include "../src/error.hpp"
+#include "../src/generate_table.cuh"
+#include "../src/registered_memory_resource.hpp"
+#include "../src/setup.hpp"
 
 #include <cudf/join.hpp>
 #include <cudf/sorting.hpp>
@@ -45,13 +44,14 @@ step 2.
 #include <rmm/mr/device/per_device_resource.hpp>
 #include <rmm/mr/device/pool_memory_resource.hpp>
 
-#include "../src/communicator.h"
-#include "../src/distribute_table.cuh"
-#include "../src/distributed_join.cuh"
-#include "../src/error.cuh"
-#include "../src/generate_table.cuh"
-#include "../src/registered_memory_resource.hpp"
-#include "../src/setup.cuh"
+#include <cstdint>
+#include <iostream>
+#include <memory>
+#include <string>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <vector>
 
 using cudf::table;
 

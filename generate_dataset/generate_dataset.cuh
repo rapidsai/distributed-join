@@ -14,19 +14,21 @@
  * limitations under the License.
  */
 
-#ifndef __GENERATE_INPUT_TABLES_CUH
-#define __GENERATE_INPUT_TABLES_CUH
+#pragma once
 
-#include <curand.h>
-#include <curand_kernel.h>
+#include "../src/error.hpp"
+#include "nvtx_helper.cuh"
+
 #include <rmm/thrust_rmm_allocator.h>
+
 #include <thrust/distance.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/sequence.h>
-#include <cassert>
 
-#include "../src/error.cuh"
-#include "nvtx_helper.cuh"
+#include <curand.h>
+#include <curand_kernel.h>
+
+#include <cassert>
 
 /* redefine atomic compare and swap with signed type */
 __device__ __inline__ int64_t atomicCAS(int64_t* address, int64_t compare, int64_t val)
@@ -256,5 +258,3 @@ void generate_input_tables(key_type* const build_tbl,
   CUDA_RT_CALL(cudaGetLastError());
   CUDA_RT_CALL(cudaDeviceSynchronize());
 }
-
-#endif  // GENERATE_INPUT_TABLES_CUH

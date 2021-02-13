@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "../src/communicator.h"
+#include "../src/communicator.hpp"
 #include "../src/distributed_join.cuh"
-#include "../src/error.cuh"
-#include "../src/setup.cuh"
+#include "../src/error.hpp"
+#include "../src/setup.hpp"
 
 #include <cudf/column/column.hpp>
 #include <cudf/column/column_factories.hpp>

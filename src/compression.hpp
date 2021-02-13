@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "error.cuh"
+#include "error.hpp"
 
 #include <cascaded.hpp>
 #include <nvcomp.hpp>
@@ -29,7 +29,7 @@
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/device_buffer.hpp>
 
-#include <cuda_runtime_api.h>
+#include <cuda_runtime.h>
 #include <simt/type_traits>
 
 #include <mpi.h>

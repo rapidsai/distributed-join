@@ -14,19 +14,20 @@
  * limitations under the License.
  */
 
-#include <mpi.h>
-#include <cassert>
-#include <cstdint>
-#include <iostream>
-#include <vector>
+#include "../src/communicator.hpp"
+#include "../src/error.hpp"
+#include "../src/setup.hpp"
 
 #include <rmm/device_buffer.hpp>
 #include <rmm/mr/device/per_device_resource.hpp>
 #include <rmm/mr/device/pool_memory_resource.hpp>
 
-#include "../src/communicator.h"
-#include "../src/error.cuh"
-#include "../src/setup.cuh"
+#include <mpi.h>
+
+#include <cassert>
+#include <cstdint>
+#include <iostream>
+#include <vector>
 
 static int64_t COUNT = 50'000'000LL;
 

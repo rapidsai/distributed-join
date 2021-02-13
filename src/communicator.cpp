@@ -14,18 +14,21 @@
  * limitations under the License.
  */
 
+#include "communicator.hpp"
+#include "error.hpp"
+
+#include <rmm/mr/device/per_device_resource.hpp>
+
 #include <mpi.h>
 #include <ucp/api/ucp.h>
+
+#include <cuda_runtime.h>
+
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
-
-#include <rmm/mr/device/per_device_resource.hpp>
-
-#include "communicator.h"
-#include "error.cuh"
 
 void Communicator::initialize()
 {

@@ -14,6 +14,21 @@
  * limitations under the License.
  */
 
+#include "../src/communicator.hpp"
+#include "../src/distributed_join.cuh"
+#include "../src/error.hpp"
+#include "../src/generate_table.cuh"
+#include "../src/registered_memory_resource.hpp"
+#include "../src/setup.hpp"
+
+#include <cudf/table/table.hpp>
+#include <cudf/types.hpp>
+#include <rmm/mr/device/pool_memory_resource.hpp>
+
+#include <cuda_profiler_api.h>
+
+#include <mpi.h>
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -25,20 +40,6 @@
 #include <tuple>
 #include <utility>
 #include <vector>
-
-#include <cuda_profiler_api.h>
-#include <mpi.h>
-
-#include <cudf/table/table.hpp>
-#include <cudf/types.hpp>
-#include <rmm/mr/device/pool_memory_resource.hpp>
-
-#include "../src/communicator.h"
-#include "../src/distributed_join.cuh"
-#include "../src/error.cuh"
-#include "../src/generate_table.cuh"
-#include "../src/registered_memory_resource.hpp"
-#include "../src/setup.cuh"
 
 static std::string key_type     = "int64_t";
 static std::string payload_type = "int64_t";
