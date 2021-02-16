@@ -29,6 +29,12 @@ find_package(MPI REQUIRED)
 find_package(NVCOMP REQUIRED)
 
 set(GPU_ARCHS ${GPU_ARCHS} "70;80")
+
+add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-Wall>")
+add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-Werror>")
+add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:--compiler-options=-Wall>")
+add_compile_options("$<$<COMPILE_LANGUAGE:CUDA>:--compiler-options=-Werror>")
+
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
 set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -g")
 set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -g")

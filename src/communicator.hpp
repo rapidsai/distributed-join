@@ -82,6 +82,8 @@ class Communicator {
    */
   virtual bool group_by_batch() = 0;
 
+  virtual ~Communicator() = default;
+
   int mpi_rank;
   int mpi_size;
   int current_device;
@@ -169,6 +171,8 @@ class MPILikeCommunicator : public Communicator {
    */
   virtual void waitall(std::vector<comm_handle_t>::const_iterator begin,
                        std::vector<comm_handle_t>::const_iterator end) = 0;
+
+  virtual ~MPILikeCommunicator() = default;
 
   // used for keeping track of the pending requests since the last *start* call
   std::vector<comm_handle_t> pending_requests;

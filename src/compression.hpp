@@ -34,6 +34,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
@@ -198,13 +199,13 @@ struct decompression_functor {
         compressed_data[ipartition], compressed_sizes[ipartition], streams[ipartition].value());
 
       const size_t output_count = decompressors[ipartition]->get_num_elements();
-      assert(output_count == expected_output_counts[ipartition]);
+      assert(static_cast<int64_t>(output_count) == expected_output_counts[ipartition]);
 
       temp_sizes[ipartition]  = decompressors[ipartition]->get_temp_size();
       temp_spaces[ipartition] = rmm::device_buffer(temp_sizes[ipartition], streams[ipartition]);
     }
 
-    for (int ipartition = 0; ipartition < npartitions; ipartition++) {
+    for (size_t ipartition = 0; ipartition < npartitions; ipartition++) {
       if (expected_output_counts[ipartition] == 0) continue;
 
       decompressors[ipartition]->decompress_async(temp_spaces[ipartition].data(),

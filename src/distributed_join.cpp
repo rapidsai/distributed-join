@@ -96,7 +96,7 @@ void inner_join_func(vector<std::unique_ptr<table>> &communicated_left,
   std::chrono::time_point<high_resolution_clock> start_time;
   std::chrono::time_point<high_resolution_clock> stop_time;
 
-  for (int ibatch = 0; ibatch < flags.size(); ibatch++) {
+  for (size_t ibatch = 0; ibatch < flags.size(); ibatch++) {
     // busy waiting for all-to-all communication of ibatch to finish
     while (!flags[ibatch]) { ; }
 
@@ -320,8 +320,8 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
   int mpi_rank = communicator->mpi_rank;
   int mpi_size = communicator->mpi_size;
 
-  double start_time;
-  double stop_time;
+  double start_time              = 0.0;
+  double stop_time               = 0.0;
   double total_compression_time  = 0.0;
   double total_uncompressed_size = 0.0;
   double total_compressed_size   = 0.0;
@@ -329,12 +329,14 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
   size_t *compressed_buffer_sizes_pinned    = static_cast<size_t *>(preallocated_pinned_buffer);
   bool alloc_compressed_buffer_sizes_pinned = false;
 
-  vector<rmm::cuda_stream> compression_streams;
-  for (int irank = 0; irank < mpi_size; irank++) compression_streams.emplace_back();
+  vector<rmm::cuda_stream> compression_streams(mpi_size);
 
   vector<rmm::cuda_stream_view> compression_stream_views;
-  for (int irank = 0; irank < mpi_size; irank++)
-    compression_stream_views.push_back(compression_streams[irank].view());
+  compression_stream_views.reserve(mpi_size);
+
+  for (const auto &compression_stream : compression_streams) {
+    compression_stream_views.push_back(compression_stream.view());
+  }
 
   for (auto &buffer : all_to_all_comm_buffers) {
     if (buffer.compression_method == CompressionMethod::none) {
@@ -478,20 +480,22 @@ void postprocess_all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buf
                                  bool include_self,
                                  bool report_timing)
 {
-  int mpi_rank = communicator->mpi_rank;
-  int mpi_size = communicator->mpi_size;
-  double start_time;
-  double stop_time;
+  int mpi_rank                   = communicator->mpi_rank;
+  int mpi_size                   = communicator->mpi_size;
+  double start_time              = 0.0;
+  double stop_time               = 0.0;
   double total_uncompressed_size = 0.0;
 
   if (report_timing) { start_time = MPI_Wtime(); }
 
-  vector<rmm::cuda_stream> decompression_streams;
-  for (int irank = 0; irank < mpi_size; irank++) decompression_streams.emplace_back();
+  vector<rmm::cuda_stream> decompression_streams(mpi_size);
 
   vector<rmm::cuda_stream_view> decompression_stream_views;
-  for (int irank = 0; irank < mpi_size; irank++)
-    decompression_stream_views.push_back(decompression_streams[irank].view());
+  decompression_stream_views.reserve(mpi_size);
+
+  for (const auto &decompression_stream : decompression_streams) {
+    decompression_stream_views.push_back(decompression_stream.view());
+  }
 
   // Decompress compressed data into destination buffer
   for (auto &buffer : all_to_all_comm_buffers) {
@@ -563,8 +567,6 @@ std::unique_ptr<table> distributed_inner_join(
   std::chrono::time_point<high_resolution_clock> start_time;
   std::chrono::time_point<high_resolution_clock> stop_time;
 
-  rmm::mr::device_memory_resource *mr = rmm::mr::get_current_device_resource();
-
   /* Hash partition */
 
   if (report_timing) { start_time = high_resolution_clock::now(); }
@@ -615,12 +617,12 @@ std::unique_ptr<table> distributed_inner_join(
 
   // Note: General stategy for the string columns during all-to-all communication
   // Each string column in cuDF consists of two subcolumns: a char subcolumn and an offset
-  // subcolumn. For the char subcolumn, we need to first gather the offsets in this string subcolumn
-  // of all ranks by using `gather_string_offsets`, and then it can be all-to-all communicated using
-  // the gathered offsets. For the offset subcolumn, we can first calculate the sizes of all rows
-  // by calculating the adjacent differences. Then, the sizes are all-to-all communicated. Once the
-  // all-to-all communication finishes, on target rank we can reconstruct the offset subcolumn by
-  // using a scan on sizes.
+  // subcolumn. For the char subcolumn, we need to first gather the offsets in this string
+  // subcolumn of all ranks by using `gather_string_offsets`, and then it can be all-to-all
+  // communicated using the gathered offsets. For the offset subcolumn, we can first calculate the
+  // sizes of all rows by calculating the adjacent differences. Then, the sizes are all-to-all
+  // communicated. Once the all-to-all communication finishes, on target rank we can reconstruct
+  // the offset subcolumn by using a scan on sizes.
 
   /* Communicate the number of bytes of string columns */
 
