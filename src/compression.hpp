@@ -186,16 +186,15 @@ struct decompression_functor {
     std::vector<size_t> temp_sizes(npartitions);
 
     // nvcomp::Decompressor objects are reused in the two passes below since nvcomp::Decompressor
-    // constructor can be synchrnous to the host thread. new operator is used instead of
+    // constructor can be synchrnous to the host thread. std::make_unique is used instead of
     // std::vector because the copy constructor in nvcomp::Decompressor is deleted.
 
-    nvcomp::Decompressor<T> **decompressors = new nvcomp::Decompressor<T> *[npartitions];
-    memset(decompressors, 0, sizeof(nvcomp::Decompressor<T> *) * npartitions);
+    auto decompressors = std::make_unique<std::unique_ptr<nvcomp::Decompressor<T>>[]>(npartitions);
 
     for (size_t ipartition = 0; ipartition < npartitions; ipartition++) {
       if (expected_output_counts[ipartition] == 0) continue;
 
-      decompressors[ipartition] = new nvcomp::Decompressor<T>(
+      decompressors[ipartition] = std::make_unique<nvcomp::Decompressor<T>>(
         compressed_data[ipartition], compressed_sizes[ipartition], streams[ipartition].value());
 
       const size_t output_count = decompressors[ipartition]->get_num_elements();
@@ -214,11 +213,6 @@ struct decompression_functor {
                                                   expected_output_counts[ipartition],
                                                   streams[ipartition].value());
     }
-
-    for (int ipartition = 0; ipartition < npartitions; ipartition++)
-      delete decompressors[ipartition];
-
-    delete[] decompressors;
   }
 
   template <
