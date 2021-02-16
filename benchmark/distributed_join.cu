@@ -15,7 +15,8 @@
  */
 
 #include "../src/communicator.hpp"
-#include "../src/distributed_join.cuh"
+#include "../src/compression.hpp"
+#include "../src/distributed_join.hpp"
 #include "../src/error.hpp"
 #include "../src/generate_table.cuh"
 #include "../src/registered_memory_resource.hpp"

@@ -17,8 +17,9 @@
 #pragma once
 
 #include "../generate_dataset/generate_dataset.cuh"
+#include "comm.hpp"
 #include "compression.hpp"
-#include "distributed_join.cuh"
+#include "distributed_join.hpp"
 #include "error.hpp"
 
 #include <cudf/column/column.hpp>
@@ -35,8 +36,6 @@
 #include <tuple>
 #include <utility>
 #include <vector>
-
-using cudf::table;
 
 struct generate_payload_functor {
   template <typename T,
@@ -75,7 +74,7 @@ struct generate_payload_functor {
  * @return A pair of generated build table and probe table.
  */
 template <typename KEY_T, typename PAYLOAD_T>
-std::pair<std::unique_ptr<table>, std::unique_ptr<table>> generate_build_probe_tables(
+std::pair<std::unique_ptr<cudf::table>, std::unique_ptr<cudf::table>> generate_build_probe_tables(
   cudf::size_type build_table_nrows,
   cudf::size_type probe_table_nrows,
   double selectivity,
@@ -119,8 +118,8 @@ std::pair<std::unique_ptr<table>, std::unique_ptr<table>> generate_build_probe_t
 
   // return the generated tables
 
-  auto build_table = std::make_unique<table>(std::move(build));
-  auto probe_table = std::make_unique<table>(std::move(probe));
+  auto build_table = std::make_unique<cudf::table>(std::move(build));
+  auto probe_table = std::make_unique<cudf::table>(std::move(probe));
 
   return std::make_pair(std::move(build_table), std::move(probe_table));
 }
@@ -155,7 +154,7 @@ void add_constant_to_column(cudf::mutable_column_view column, data_type constant
  * @return A pair of generated build and probe table distributed on each rank.
  */
 template <typename KEY_T, typename PAYLOAD_T>
-std::pair<std::unique_ptr<table>, std::unique_ptr<table>> generate_tables_distributed(
+std::pair<std::unique_ptr<cudf::table>, std::unique_ptr<cudf::table>> generate_tables_distributed(
   cudf::size_type build_table_nrows_per_rank,
   cudf::size_type probe_table_nrows_per_rank,
   double selectivity,
@@ -178,8 +177,8 @@ std::pair<std::unique_ptr<table>, std::unique_ptr<table>> generate_tables_distri
 
   // Generate local build and probe table on each rank
 
-  std::unique_ptr<table> pre_shuffle_build_table;
-  std::unique_ptr<table> pre_shuffle_probe_table;
+  std::unique_ptr<cudf::table> pre_shuffle_build_table;
+  std::unique_ptr<cudf::table> pre_shuffle_probe_table;
 
   std::tie(pre_shuffle_build_table, pre_shuffle_probe_table) =
     generate_build_probe_tables<KEY_T, PAYLOAD_T>(build_table_nrows_per_rank,
@@ -214,25 +213,27 @@ std::pair<std::unique_ptr<table>, std::unique_ptr<table>> generate_tables_distri
 
   // Allocate memory for the result tables
 
-  vector<int64_t> build_table_recv_offset;
-  vector<int64_t> probe_table_recv_offset;
+  std::vector<int64_t> build_table_recv_offset;
+  std::vector<int64_t> probe_table_recv_offset;
 
   communicate_sizes(build_table_offset, build_table_recv_offset, communicator);
   communicate_sizes(probe_table_offset, probe_table_recv_offset, communicator);
 
-  vector<std::unique_ptr<column>> build_table_columns;
+  std::vector<std::unique_ptr<cudf::column>> build_table_columns;
   for (cudf::size_type icol = 0; icol < pre_shuffle_build_table->num_columns(); icol++) {
     build_table_columns.push_back(make_fixed_width_column(
       pre_shuffle_build_table->view().column(icol).type(), build_table_recv_offset.back()));
   }
-  std::unique_ptr<table> build_table = std::make_unique<table>(std::move(build_table_columns));
+  std::unique_ptr<cudf::table> build_table =
+    std::make_unique<cudf::table>(std::move(build_table_columns));
 
-  vector<std::unique_ptr<column>> probe_table_columns;
+  std::vector<std::unique_ptr<cudf::column>> probe_table_columns;
   for (cudf::size_type icol = 0; icol < pre_shuffle_probe_table->num_columns(); icol++) {
     probe_table_columns.push_back(make_fixed_width_column(
       pre_shuffle_probe_table->view().column(icol).type(), probe_table_recv_offset.back()));
   }
-  std::unique_ptr<table> probe_table = std::make_unique<table>(std::move(probe_table_columns));
+  std::unique_ptr<cudf::table> probe_table =
+    std::make_unique<cudf::table>(std::move(probe_table_columns));
 
   CUDA_RT_CALL(cudaStreamSynchronize(cudaStreamDefault));
 

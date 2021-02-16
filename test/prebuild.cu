@@ -16,7 +16,7 @@
 
 #include "../src/communicator.hpp"
 #include "../src/distribute_table.hpp"
-#include "../src/distributed_join.cuh"
+#include "../src/distributed_join.hpp"
 #include "../src/error.hpp"
 #include "../src/setup.hpp"
 

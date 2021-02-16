@@ -42,7 +42,8 @@ UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc mpirun -n 4 --cpus-per-rank 2 
 */
 
 #include "../src/comm.hpp"
-#include "../src/distributed_join.cuh"
+#include "../src/compression.hpp"
+#include "../src/distributed_join.hpp"
 #include "../src/setup.hpp"
 
 #include <cudf/column/column_view.hpp>

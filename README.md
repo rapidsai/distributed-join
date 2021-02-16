@@ -136,7 +136,7 @@ benchmark/
 src/
     comm.hpp                    Communication related helper functions.
     communicator.cpp            Different implementations for the common send/recv interface definced in the header file.
-    distributed_join.cuh        Distributed join and all-to-all communication implementation.
+    distributed_join.cu         Distributed join and all-to-all communication implementation.
     distribute_table.cpp        Table distribution/collection between the root rank and all worker ranks.
     error.hpp                   Error checking macros.
     setup.hpp                   Set CUDA devices and initialize memory pool.

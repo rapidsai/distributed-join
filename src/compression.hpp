@@ -25,14 +25,11 @@
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
 #include <cudf/utilities/traits.hpp>
-#include <cudf/utilities/type_dispatcher.hpp>
 #include <rmm/cuda_stream_view.hpp>
 #include <rmm/device_buffer.hpp>
 
 #include <cuda_runtime.h>
 #include <simt/type_traits>
-
-#include <mpi.h>
 
 #include <cassert>
 #include <cstdint>
@@ -41,15 +38,13 @@
 #include <type_traits>
 #include <vector>
 
-using std::vector;
-
 enum class CompressionMethod { none, cascaded, lz4 };
 
 /* A structure outlining how to compress a column */
 struct ColumnCompressionOptions {
   CompressionMethod compression_method;
   nvcompCascadedFormatOpts cascaded_format;
-  vector<ColumnCompressionOptions> children_compression_options;
+  std::vector<ColumnCompressionOptions> children_compression_options;
 
   ColumnCompressionOptions() = default;
 
@@ -66,7 +61,7 @@ struct ColumnCompressionOptions {
 
   ColumnCompressionOptions(CompressionMethod compression_method,
                            nvcompCascadedFormatOpts cascaded_format,
-                           vector<ColumnCompressionOptions> children_compression_options)
+                           std::vector<ColumnCompressionOptions> children_compression_options)
     : compression_method(compression_method),
       cascaded_format(cascaded_format),
       children_compression_options(children_compression_options)
@@ -89,18 +84,18 @@ struct compression_functor {
   template <
     typename T,
     std::enable_if_t<!cudf::is_timestamp_t<T>::value && !cudf::is_duration_t<T>::value> * = nullptr>
-  void operator()(vector<const void *> const &uncompressed_data,
-                  vector<cudf::size_type> const &uncompressed_counts,
-                  vector<rmm::device_buffer> &compressed_data,
+  void operator()(std::vector<const void *> const &uncompressed_data,
+                  std::vector<cudf::size_type> const &uncompressed_counts,
+                  std::vector<rmm::device_buffer> &compressed_data,
                   size_t *compressed_sizes,
-                  vector<rmm::cuda_stream_view> const &streams,
+                  std::vector<rmm::cuda_stream_view> const &streams,
                   nvcompCascadedFormatOpts cascaded_format)
   {
     size_t npartitions = uncompressed_counts.size();
     compressed_data.resize(npartitions);
 
-    vector<rmm::device_buffer> temp_spaces(npartitions);
-    vector<size_t> temp_sizes(npartitions);
+    std::vector<rmm::device_buffer> temp_spaces(npartitions);
+    std::vector<size_t> temp_sizes(npartitions);
 
     for (size_t ipartition = 0; ipartition < npartitions; ipartition++) {
       if (uncompressed_counts[ipartition] == 0) {
@@ -150,11 +145,11 @@ struct compression_functor {
   template <
     typename T,
     std::enable_if_t<cudf::is_timestamp_t<T>::value || cudf::is_duration_t<T>::value> * = nullptr>
-  void operator()(vector<const void *> const &uncompressed_data,
-                  vector<cudf::size_type> const &uncompressed_counts,
-                  vector<rmm::device_buffer> &compressed_data,
+  void operator()(std::vector<const void *> const &uncompressed_data,
+                  std::vector<cudf::size_type> const &uncompressed_counts,
+                  std::vector<rmm::device_buffer> &compressed_data,
                   size_t *compressed_sizes,
-                  vector<rmm::cuda_stream_view> const &streams,
+                  std::vector<rmm::cuda_stream_view> const &streams,
                   nvcompCascadedFormatOpts cascaded_format)
   {
     // If the data type is duration or time, use the corresponding arithmetic type
@@ -179,16 +174,16 @@ struct decompression_functor {
   template <
     typename T,
     std::enable_if_t<!cudf::is_timestamp_t<T>::value && !cudf::is_duration_t<T>::value> * = nullptr>
-  void operator()(vector<const void *> const &compressed_data,
-                  vector<int64_t> const &compressed_sizes,
-                  vector<void *> const &outputs,
-                  vector<int64_t> const &expected_output_counts,
-                  vector<rmm::cuda_stream_view> const &streams)
+  void operator()(std::vector<const void *> const &compressed_data,
+                  std::vector<int64_t> const &compressed_sizes,
+                  std::vector<void *> const &outputs,
+                  std::vector<int64_t> const &expected_output_counts,
+                  std::vector<rmm::cuda_stream_view> const &streams)
   {
     size_t npartitions = compressed_sizes.size();
 
-    vector<rmm::device_buffer> temp_spaces(npartitions);
-    vector<size_t> temp_sizes(npartitions);
+    std::vector<rmm::device_buffer> temp_spaces(npartitions);
+    std::vector<size_t> temp_sizes(npartitions);
 
     // nvcomp::Decompressor objects are reused in the two passes below since nvcomp::Decompressor
     // constructor can be synchrnous to the host thread. new operator is used instead of
@@ -229,11 +224,11 @@ struct decompression_functor {
   template <
     typename T,
     std::enable_if_t<cudf::is_timestamp_t<T>::value || cudf::is_duration_t<T>::value> * = nullptr>
-  void operator()(vector<const void *> const &compressed_data,
-                  vector<int64_t> const &compressed_sizes,
-                  vector<void *> const &outputs,
-                  vector<int64_t> const &expected_output_counts,
-                  vector<rmm::cuda_stream_view> const &streams)
+  void operator()(std::vector<const void *> const &compressed_data,
+                  std::vector<int64_t> const &compressed_sizes,
+                  std::vector<void *> const &outputs,
+                  std::vector<int64_t> const &expected_output_counts,
+                  std::vector<rmm::cuda_stream_view> const &streams)
   {
     // If the data type is duration or time, use the corresponding arithmetic type
     operator()<typename T::rep>(
@@ -303,44 +298,8 @@ struct cascaded_selector_functor {
  * @returns Vector of length equal to number of columns in *input_table*, where each element
  * representing the compression options for each column.
  */
-vector<ColumnCompressionOptions> generate_auto_select_compression_options(
-  cudf::table_view input_table)
-{
-  vector<ColumnCompressionOptions> compression_options;
-
-  for (cudf::size_type icol = 0; icol < input_table.num_columns(); icol++) {
-    cudf::column_view input_column = input_table.column(icol);
-    cudf::data_type dtype          = input_column.type();
-    if (dtype.id() == cudf::type_id::STRING) {
-      vector<ColumnCompressionOptions> children_options;
-
-      // offset subcolumn
-      cudf::data_type offset_dtype = input_column.child(0).type();
-      nvcompCascadedFormatOpts offset_cascaded_opts =
-        cudf::type_dispatcher(offset_dtype,
-                              cascaded_selector_functor{},
-                              input_column.child(0).head(),
-                              input_column.child(0).size() * cudf::size_of(offset_dtype));
-      children_options.emplace_back(CompressionMethod::cascaded, offset_cascaded_opts);
-
-      // do not compress char subcolumn
-      children_options.emplace_back(CompressionMethod::none);
-
-      compression_options.emplace_back(
-        CompressionMethod::none, nvcompCascadedFormatOpts(), children_options);
-    } else {
-      nvcompCascadedFormatOpts column_cascaded_opts =
-        cudf::type_dispatcher(dtype,
-                              cascaded_selector_functor{},
-                              input_column.head(),
-                              input_column.size() * cudf::size_of(dtype));
-
-      compression_options.emplace_back(CompressionMethod::cascaded, column_cascaded_opts);
-    }
-  }
-
-  return compression_options;
-}
+std::vector<ColumnCompressionOptions> generate_auto_select_compression_options(
+  cudf::table_view input_table);
 
 /**
  * Generate compression options that no compression should be performed.
@@ -350,26 +309,8 @@ vector<ColumnCompressionOptions> generate_auto_select_compression_options(
  * @returns Vector of length equal to number of columns in *input_table*, where each element
  * representing the compression options for each column.
  */
-vector<ColumnCompressionOptions> generate_none_compression_options(cudf::table_view input_table)
-{
-  vector<ColumnCompressionOptions> compression_options;
-
-  for (cudf::size_type icol = 0; icol < input_table.num_columns(); icol++) {
-    if (input_table.column(icol).type().id() == cudf::type_id::STRING) {
-      vector<ColumnCompressionOptions> children_options;
-      // offset subcolumn
-      children_options.emplace_back(CompressionMethod::none);
-      // char subcolumn
-      children_options.emplace_back(CompressionMethod::none);
-      compression_options.emplace_back(
-        CompressionMethod::none, nvcompCascadedFormatOpts(), children_options);
-    } else {
-      compression_options.emplace_back(CompressionMethod::none);
-    }
-  }
-
-  return compression_options;
-}
+std::vector<ColumnCompressionOptions> generate_none_compression_options(
+  cudf::table_view input_table);
 
 /**
  * Broadcast the compression options of a column from the root rank to all ranks.
@@ -384,38 +325,7 @@ vector<ColumnCompressionOptions> generate_none_compression_options(cudf::table_v
  * @returns Broadcasted compression options on all ranks.
  */
 ColumnCompressionOptions broadcast_compression_options(cudf::column_view input_column,
-                                                       ColumnCompressionOptions input_options)
-{
-  int mpi_rank;
-  MPI_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank));
-
-  cudf::data_type dtype = input_column.type();
-
-  CompressionMethod compression_method     = input_options.compression_method;
-  nvcompCascadedFormatOpts cascaded_format = input_options.cascaded_format;
-  vector<ColumnCompressionOptions> children_compression_options;
-
-  MPI_CALL(MPI_Bcast(&compression_method, sizeof(CompressionMethod), MPI_CHAR, 0, MPI_COMM_WORLD));
-  MPI_CALL(
-    MPI_Bcast(&cascaded_format, sizeof(nvcompCascadedFormatOpts), MPI_CHAR, 0, MPI_COMM_WORLD));
-
-  if (dtype.id() == cudf::type_id::STRING) {
-    ColumnCompressionOptions compression_options;
-
-    // offset subcolumn
-    if (mpi_rank == 0) { compression_options = input_options.children_compression_options[0]; }
-    children_compression_options.push_back(
-      broadcast_compression_options(input_column.child(0), compression_options));
-
-    // char subcolumn
-    if (mpi_rank == 0) { compression_options = input_options.children_compression_options[1]; }
-    children_compression_options.push_back(
-      broadcast_compression_options(input_column.child(1), compression_options));
-  }
-
-  return ColumnCompressionOptions(
-    compression_method, cascaded_format, children_compression_options);
-}
+                                                       ColumnCompressionOptions input_options);
 
 /**
  * Broadcast the compression options of a table from the root rank to all ranks.
@@ -431,24 +341,8 @@ ColumnCompressionOptions broadcast_compression_options(cudf::column_view input_c
  *
  * @returns Broadcasted compression options on all ranks.
  */
-vector<ColumnCompressionOptions> broadcast_compression_options(
-  cudf::table_view input_table, vector<ColumnCompressionOptions> input_options)
-{
-  int mpi_rank;
-  MPI_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank));
-
-  vector<ColumnCompressionOptions> output_options;
-
-  for (cudf::size_type icol = 0; icol < input_table.num_columns(); icol++) {
-    ColumnCompressionOptions input_options_icol;
-    if (mpi_rank == 0) { input_options_icol = input_options[icol]; }
-
-    output_options.push_back(
-      broadcast_compression_options(input_table.column(icol), input_options_icol));
-  }
-
-  return output_options;
-}
+std::vector<ColumnCompressionOptions> broadcast_compression_options(
+  cudf::table_view input_table, std::vector<ColumnCompressionOptions> input_options);
 
 /**
  * Generate the same compression option on all ranks.
@@ -463,20 +357,11 @@ vector<ColumnCompressionOptions> broadcast_compression_options(
  *
  * @returns Compression options for *input_table* on all ranks.
  */
-vector<ColumnCompressionOptions> generate_compression_options_distributed(
-  cudf::table_view input_table, bool compression)
-{
-  if (!compression) { return generate_none_compression_options(input_table); }
+std::vector<ColumnCompressionOptions> generate_compression_options_distributed(
+  cudf::table_view input_table, bool compression);
 
-  int mpi_rank;
-  MPI_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank));
-
-  vector<ColumnCompressionOptions> compression_options;
-  if (mpi_rank == 0) {
-    compression_options = generate_auto_select_compression_options(input_table);
-  }
-
-  compression_options = broadcast_compression_options(input_table, compression_options);
-
-  return compression_options;
-}
+/**
+ * This helper function runs compression and decompression on a small buffer to avoid nvcomp's
+ * setup time during the actual run.
+ */
+void warmup_nvcomp();

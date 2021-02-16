@@ -15,7 +15,7 @@
  */
 
 #include "../src/communicator.hpp"
-#include "../src/distributed_join.cuh"
+#include "../src/distributed_join.hpp"
 #include "../src/error.hpp"
 #include "../src/setup.hpp"
 
@@ -25,6 +25,8 @@
 #include <cudf/types.hpp>
 #include <rmm/mr/device/managed_memory_resource.hpp>
 #include <rmm/mr/device/per_device_resource.hpp>
+
+#include <thrust/sequence.h>
 
 #include <mpi.h>
 

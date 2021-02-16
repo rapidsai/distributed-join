@@ -15,5 +15,5 @@
 
 include(BuildHelpers)
 
-file(GLOB SOURCES *.cu)
+file(GLOB SOURCES *.cu *.cpp)
 build_executables(SOURCES)
