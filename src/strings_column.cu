@@ -25,6 +25,7 @@
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
 #include <rmm/device_uvector.hpp>
+#include <rmm/mr/device/thrust_allocator_adaptor.hpp>
 
 #include <thrust/adjacent_difference.h>
 #include <thrust/device_ptr.h>
@@ -34,6 +35,10 @@
 
 #include <cstdint>
 #include <vector>
+
+// This should not be necessary with RMM >= 0.18
+template <typename T>
+using device_vector = thrust::device_vector<T, rmm::mr::thrust_allocator<T>>;
 
 void gather_string_offsets(
   cudf::table_view table,
@@ -50,7 +55,7 @@ void gather_string_offsets(
   for (int ibatch = 0; ibatch < over_decom_factor; ibatch++) {
     size_t start_idx = ibatch * mpi_size;
     size_t end_idx   = (ibatch + 1) * mpi_size + 1;
-    thrust::device_vector<cudf::size_type> d_offset(&offsets[start_idx], &offsets[end_idx]);
+    device_vector<cudf::size_type> d_offset(&offsets[start_idx], &offsets[end_idx]);
 
     for (cudf::size_type icol = 0; icol < table.num_columns(); icol++) {
       // 1. If not a string column, push an empty vector
@@ -65,7 +70,7 @@ void gather_string_offsets(
       }
 
       // 2. Gather `string_send_offsets` from offset subcolumn and `offsets`
-      thrust::device_vector<cudf::size_type> d_string_send_offsets(mpi_size + 1);
+      device_vector<cudf::size_type> d_string_send_offsets(mpi_size + 1);
       thrust::gather(rmm::exec_policy(rmm::cuda_stream_default)->on(0),
                      d_offset.begin(),
                      d_offset.end(),
