@@ -95,8 +95,8 @@ struct compression_functor {
     size_t npartitions = uncompressed_counts.size();
     compressed_data.resize(npartitions);
 
-    std::vector<rmm::device_buffer> temp_spaces(npartitions);
-    std::vector<size_t> temp_sizes(npartitions);
+    std::vector<rmm::device_buffer> nvcomp_temp_spaces(npartitions);
+    std::vector<size_t> nvcomp_temp_sizes(npartitions);
 
     for (size_t ipartition = 0; ipartition < npartitions; ipartition++) {
       if (uncompressed_counts[ipartition] == 0) {
@@ -111,10 +111,11 @@ struct compression_functor {
         cascaded_format.num_deltas,
         cascaded_format.use_bp);
 
-      temp_sizes[ipartition]  = compressor.get_temp_size();
-      temp_spaces[ipartition] = rmm::device_buffer(temp_sizes[ipartition], streams[ipartition]);
-      compressed_sizes[ipartition] =
-        compressor.get_max_output_size(temp_spaces[ipartition].data(), temp_sizes[ipartition]);
+      nvcomp_temp_sizes[ipartition] = compressor.get_temp_size();
+      nvcomp_temp_spaces[ipartition] =
+        rmm::device_buffer(nvcomp_temp_sizes[ipartition], streams[ipartition]);
+      compressed_sizes[ipartition] = compressor.get_max_output_size(
+        nvcomp_temp_spaces[ipartition].data(), nvcomp_temp_sizes[ipartition]);
       compressed_data[ipartition] =
         rmm::device_buffer(compressed_sizes[ipartition], streams[ipartition]);
     }
@@ -135,8 +136,8 @@ struct compression_functor {
                                    compressed_sizes[ipartition],
                                    streams[ipartition].value()));
 
-      compressor.compress_async(temp_spaces[ipartition].data(),
-                                temp_sizes[ipartition],
+      compressor.compress_async(nvcomp_temp_spaces[ipartition].data(),
+                                nvcomp_temp_sizes[ipartition],
                                 compressed_data[ipartition].data(),
                                 &compressed_sizes[ipartition],
                                 streams[ipartition].value());
@@ -183,8 +184,8 @@ struct decompression_functor {
   {
     size_t npartitions = compressed_sizes.size();
 
-    std::vector<rmm::device_buffer> temp_spaces(npartitions);
-    std::vector<size_t> temp_sizes(npartitions);
+    std::vector<rmm::device_buffer> nvcomp_temp_spaces(npartitions);
+    std::vector<size_t> nvcomp_temp_sizes(npartitions);
 
     // nvcomp::Decompressor objects are reused in the two passes below since nvcomp::Decompressor
     // constructor can be synchrnous to the host thread. std::make_unique is used instead of
@@ -201,15 +202,16 @@ struct decompression_functor {
       const size_t output_count = decompressors[ipartition]->get_num_elements();
       assert(static_cast<int64_t>(output_count) == expected_output_counts[ipartition]);
 
-      temp_sizes[ipartition]  = decompressors[ipartition]->get_temp_size();
-      temp_spaces[ipartition] = rmm::device_buffer(temp_sizes[ipartition], streams[ipartition]);
+      nvcomp_temp_sizes[ipartition] = decompressors[ipartition]->get_temp_size();
+      nvcomp_temp_spaces[ipartition] =
+        rmm::device_buffer(nvcomp_temp_sizes[ipartition], streams[ipartition]);
     }
 
     for (size_t ipartition = 0; ipartition < npartitions; ipartition++) {
       if (expected_output_counts[ipartition] == 0) continue;
 
-      decompressors[ipartition]->decompress_async(temp_spaces[ipartition].data(),
-                                                  temp_sizes[ipartition],
+      decompressors[ipartition]->decompress_async(nvcomp_temp_spaces[ipartition].data(),
+                                                  nvcomp_temp_sizes[ipartition],
                                                   static_cast<T *>(outputs[ipartition]),
                                                   expected_output_counts[ipartition],
                                                   streams[ipartition].value());
