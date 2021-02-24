@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -euxo pipefail
+set -exo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update -y && apt-get install -y build-essential wget cmake git vim
