@@ -106,22 +106,23 @@ ColumnCompressionOptions broadcast_compression_options(cudf::column_view input_c
   nvcompCascadedFormatOpts cascaded_format = input_options.cascaded_format;
   std::vector<ColumnCompressionOptions> children_compression_options;
 
-  MPI_CALL(MPI_Bcast(&compression_method, sizeof(CompressionMethod), MPI_CHAR, 0, MPI_COMM_WORLD));
-  MPI_CALL(
-    MPI_Bcast(&cascaded_format, sizeof(nvcompCascadedFormatOpts), MPI_CHAR, 0, MPI_COMM_WORLD));
+  MPI_CALL(MPI_Bcast(&compression_method, sizeof(compression_method), MPI_CHAR, 0, MPI_COMM_WORLD));
+  MPI_CALL(MPI_Bcast(&cascaded_format, sizeof(cascaded_format), MPI_CHAR, 0, MPI_COMM_WORLD));
 
   if (dtype.id() == cudf::type_id::STRING) {
     ColumnCompressionOptions compression_options;
 
-    // offset subcolumn
-    if (mpi_rank == 0) { compression_options = input_options.children_compression_options[0]; }
-    children_compression_options.push_back(
-      broadcast_compression_options(input_column.child(0), compression_options));
+    if (mpi_rank == 0) {
+      // a string column should always contain two subcolumns
+      assert(input_options.children_compression_options.size() == 2);
+    }
 
-    // char subcolumn
-    if (mpi_rank == 0) { compression_options = input_options.children_compression_options[1]; }
-    children_compression_options.push_back(
-      broadcast_compression_options(input_column.child(1), compression_options));
+    for (size_t icol = 0; icol < 2; icol++) {
+      if (mpi_rank == 0) { compression_options = input_options.children_compression_options[icol]; }
+
+      children_compression_options.push_back(
+        broadcast_compression_options(input_column.child(icol), compression_options));
+    }
   }
 
   return ColumnCompressionOptions(
@@ -135,6 +136,7 @@ std::vector<ColumnCompressionOptions> broadcast_compression_options(
   MPI_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank));
 
   std::vector<ColumnCompressionOptions> output_options;
+  output_options.reserve(input_table.num_columns());
 
   for (cudf::size_type icol = 0; icol < input_table.num_columns(); icol++) {
     ColumnCompressionOptions input_options_icol;
@@ -167,26 +169,28 @@ std::vector<ColumnCompressionOptions> generate_compression_options_distributed(
 
 void warmup_nvcomp()
 {
+  using T = int;
+
   constexpr size_t warmup_size = 1000;
-  rmm::device_buffer input_data(warmup_size * sizeof(int));
+  rmm::device_buffer input_data(warmup_size * sizeof(T));
 
   std::vector<rmm::device_buffer> compressed_data(1);
   size_t compressed_size;
 
   nvcompCascadedFormatOpts cascaded_format = {.num_RLEs = 1, .num_deltas = 1, .use_bp = 1};
 
-  compression_functor{}.operator()<int>({input_data.data()},
+  compression_functor{}.operator()<T>({input_data.data()},
+                                      {warmup_size},
+                                      compressed_data,
+                                      &compressed_size,
+                                      {rmm::cuda_stream_default},
+                                      cascaded_format);
+
+  rmm::device_buffer decompressed_data(warmup_size * sizeof(T));
+
+  decompression_functor{}.operator()<T>({compressed_data[0].data()},
+                                        {static_cast<int64_t>(compressed_size)},
+                                        {decompressed_data.data()},
                                         {warmup_size},
-                                        compressed_data,
-                                        &compressed_size,
-                                        {rmm::cuda_stream_default},
-                                        cascaded_format);
-
-  rmm::device_buffer decompressed_data(warmup_size * sizeof(int));
-
-  decompression_functor{}.operator()<int>({compressed_data[0].data()},
-                                          {static_cast<int64_t>(compressed_size)},
-                                          {decompressed_data.data()},
-                                          {warmup_size},
-                                          {rmm::cuda_stream_default});
+                                        {rmm::cuda_stream_default});
 }

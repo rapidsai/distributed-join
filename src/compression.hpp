@@ -47,28 +47,28 @@ struct ColumnCompressionOptions {
   nvcompCascadedFormatOpts cascaded_format;
   std::vector<ColumnCompressionOptions> children_compression_options;
 
-  ColumnCompressionOptions() = default;
-
-  ColumnCompressionOptions(CompressionMethod compression_method)
-    : compression_method(compression_method)
-  {
-  }
-
-  ColumnCompressionOptions(CompressionMethod compression_method,
-                           nvcompCascadedFormatOpts cascaded_format)
-    : compression_method(compression_method), cascaded_format(cascaded_format)
-  {
-  }
-
-  ColumnCompressionOptions(CompressionMethod compression_method,
-                           nvcompCascadedFormatOpts cascaded_format,
-                           std::vector<ColumnCompressionOptions> children_compression_options)
+  ColumnCompressionOptions(CompressionMethod compression_method     = CompressionMethod::none,
+                           nvcompCascadedFormatOpts cascaded_format = {},
+                           std::vector<ColumnCompressionOptions> children_compression_options = {})
     : compression_method(compression_method),
       cascaded_format(cascaded_format),
       children_compression_options(children_compression_options)
   {
   }
 };
+
+template <typename T>
+using is_cascaded_supported = simt::std::disjunction<std::is_same<int8_t, T>,
+                                                     std::is_same<uint8_t, T>,
+                                                     std::is_same<int16_t, T>,
+                                                     std::is_same<uint16_t, T>,
+                                                     std::is_same<int32_t, T>,
+                                                     std::is_same<uint32_t, T>,
+                                                     std::is_same<int64_t, T>,
+                                                     std::is_same<uint64_t, T>>;
+
+template <typename T>
+using is_time_t = simt::std::disjunction<cudf::is_timestamp_t<T>, cudf::is_duration_t<T>>;
 
 struct compression_functor {
   /**
@@ -82,9 +82,7 @@ struct compression_functor {
    * @param[out] compressed_sizes Number of bytes for each buffer in *compressed_data*.
    * @param[in] streams CUDA streams used for the compression kernels.
    */
-  template <
-    typename T,
-    std::enable_if_t<!cudf::is_timestamp_t<T>::value && !cudf::is_duration_t<T>::value> * = nullptr>
+  template <typename T, std::enable_if_t<!is_time_t<T>::value> * = nullptr>
   void operator()(std::vector<const void *> const &uncompressed_data,
                   std::vector<cudf::size_type> const &uncompressed_counts,
                   std::vector<rmm::device_buffer> &compressed_data,
@@ -144,9 +142,7 @@ struct compression_functor {
     }
   }
 
-  template <
-    typename T,
-    std::enable_if_t<cudf::is_timestamp_t<T>::value || cudf::is_duration_t<T>::value> * = nullptr>
+  template <typename T, std::enable_if_t<is_time_t<T>::value> * = nullptr>
   void operator()(std::vector<const void *> const &uncompressed_data,
                   std::vector<cudf::size_type> const &uncompressed_counts,
                   std::vector<rmm::device_buffer> &compressed_data,
@@ -173,9 +169,7 @@ struct decompression_functor {
    * @param[out] outputs Decompressed outputs. This argument needs to be preallocated.
    * @param[in] expected_output_counts Expected number of elements in the decompressed buffers.
    */
-  template <
-    typename T,
-    std::enable_if_t<!cudf::is_timestamp_t<T>::value && !cudf::is_duration_t<T>::value> * = nullptr>
+  template <typename T, std::enable_if_t<!is_time_t<T>::value> * = nullptr>
   void operator()(std::vector<const void *> const &compressed_data,
                   std::vector<int64_t> const &compressed_sizes,
                   std::vector<void *> const &outputs,
@@ -218,9 +212,7 @@ struct decompression_functor {
     }
   }
 
-  template <
-    typename T,
-    std::enable_if_t<cudf::is_timestamp_t<T>::value || cudf::is_duration_t<T>::value> * = nullptr>
+  template <typename T, std::enable_if_t<is_time_t<T>::value> * = nullptr>
   void operator()(std::vector<const void *> const &compressed_data,
                   std::vector<int64_t> const &compressed_sizes,
                   std::vector<void *> const &outputs,
@@ -232,16 +224,6 @@ struct decompression_functor {
       compressed_data, compressed_sizes, outputs, expected_output_counts, streams);
   }
 };
-
-template <typename T>
-using is_cascaded_supported = simt::std::disjunction<std::is_same<int8_t, T>,
-                                                     std::is_same<uint8_t, T>,
-                                                     std::is_same<int16_t, T>,
-                                                     std::is_same<uint16_t, T>,
-                                                     std::is_same<int32_t, T>,
-                                                     std::is_same<uint32_t, T>,
-                                                     std::is_same<int64_t, T>,
-                                                     std::is_same<uint64_t, T>>;
 
 struct cascaded_selector_functor {
   /**
@@ -268,9 +250,7 @@ struct cascaded_selector_functor {
     return selector.select_config(temp_space.data(), temp_bytes, &estimate_ratio, 0);
   }
 
-  template <
-    typename T,
-    std::enable_if_t<cudf::is_timestamp_t<T>::value || cudf::is_duration_t<T>::value> * = nullptr>
+  template <typename T, std::enable_if_t<is_time_t<T>::value> * = nullptr>
   nvcompCascadedFormatOpts operator()(const void *uncompressed_data, size_t byte_len)
   {
     // If the data type is duration or time, use the corresponding arithmetic type
@@ -278,8 +258,7 @@ struct cascaded_selector_functor {
   }
 
   template <typename T,
-            std::enable_if_t<!is_cascaded_supported<T>::value && !cudf::is_timestamp_t<T>::value &&
-                             !cudf::is_duration_t<T>::value> * = nullptr>
+            std::enable_if_t<!is_cascaded_supported<T>::value && !is_time_t<T>::value> * = nullptr>
   nvcompCascadedFormatOpts operator()(const void *uncompressed_data, size_t byte_len)
   {
     throw std::runtime_error("Unsupported type for CascadedSelector");
