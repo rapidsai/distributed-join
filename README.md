@@ -143,7 +143,7 @@ src/
 test/
     buffer_communicator.cu          Test the correctness of the buffer communicator.
     compare_against_single_gpu.cu   Test the correctness of the distributed-join compared to single-GPU implementation on random tables.
-    prebuild.cu                     Test the correctness of the distributed-join compared to known solution.
+    compare_against_analytical.cu   Test the correctness of the distributed-join compared to known solution.
 ```
 
 ## Code formatting

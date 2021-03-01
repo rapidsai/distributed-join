@@ -1,4 +1,4 @@
 compare_against_single_gpu
-prebuild
+compare_against_analytical
 buffer_communicator
 string_payload
