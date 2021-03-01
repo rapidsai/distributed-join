@@ -16,7 +16,7 @@
 
 #include "strings_column.hpp"
 
-#include "comm.hpp"
+#include "all_to_all_comm.hpp"
 #include "communicator.hpp"
 #include "error.hpp"
 

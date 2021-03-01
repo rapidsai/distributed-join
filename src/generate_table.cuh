@@ -17,9 +17,8 @@
 #pragma once
 
 #include "../generate_dataset/generate_dataset.cuh"
-#include "comm.hpp"
+#include "all_to_all_comm.hpp"
 #include "compression.hpp"
-#include "distributed_join.hpp"
 #include "error.hpp"
 
 #include <cudf/column/column.hpp>
