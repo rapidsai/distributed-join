@@ -26,6 +26,19 @@
 #include <memory>
 #include <vector>
 
+/**
+ * Shuffle the table according to the hash values.
+ *
+ * Note: This function needs to be called collectively by all ranks in MPI_COMM_WORLD.
+ *
+ * @param[in] input Input table to be shuffled.
+ * @param[in] on_columns Columns used when computing the hash value of each row.
+ * @param[in] compression_options Vector of length equal to the number of columns in *input*,
+ * indicating whether/how each column needs to be compressed before communication.
+ * @param[in] hash_function Hash function used for computing the hash value of each row.
+ * @param[in] preallocated_pinned_buffer Preallocated page-locked host buffer with size at least
+ * `mpi_size * sizeof(size_t)`, used for holding the compressed sizes.
+ */
 std::unique_ptr<cudf::table> shuffle_on(cudf::table_view const& input,
                                         std::vector<cudf::size_type> const& on_columns,
                                         Communicator* communicator,
