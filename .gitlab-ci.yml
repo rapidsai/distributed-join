@@ -16,3 +16,5 @@ TITAN V:
     - UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc /conda/envs/join/bin/mpirun --allow-run-as-root --oversubscribe -n 4 --cpus-per-rank 2 bin/test/compare_against_single_gpu
     - UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc /conda/envs/join/bin/mpirun --allow-run-as-root --oversubscribe -n 4 --cpus-per-rank 2 bin/test/compare_against_analytical
     - UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc /conda/envs/join/bin/mpirun --allow-run-as-root --oversubscribe -n 4 --cpus-per-rank 2 bin/test/string_payload
+    - UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc /conda/envs/join/bin/mpirun --allow-run-as-root --oversubscribe -n 4 --cpus-per-rank 2 bin/test/test_shuffle_on
+    - UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc /conda/envs/join/bin/mpirun --allow-run-as-root --oversubscribe -n 3 --cpus-per-rank 2 bin/test/test_shuffle_on
