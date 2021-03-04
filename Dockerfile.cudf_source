@@ -14,7 +14,7 @@ SHELL ["/bin/bash", "-c"]
 # Setup cuDF
 RUN git clone https://github.com/gaohao95/cudf.git /cudf \
     && cd /cudf \
-    && git checkout branch-0.17 \
+    && git checkout branch-0.18 \
     && git submodule update --init --remote --recursive \
     && conda env create --name cudf_dev --file conda/environments/cudf_dev_cuda11.0.yml \
     && source activate cudf_dev \

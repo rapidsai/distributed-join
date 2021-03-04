@@ -20,25 +20,20 @@
 #include "communicator.hpp"
 #include "error.hpp"
 
-#include <rmm/thrust_rmm_allocator.h>
 #include <cudf/column/column_view.hpp>
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
 #include <rmm/device_uvector.hpp>
-#include <rmm/mr/device/thrust_allocator_adaptor.hpp>
+#include <rmm/device_vector.hpp>
+#include <rmm/exec_policy.hpp>
 
 #include <thrust/adjacent_difference.h>
 #include <thrust/device_ptr.h>
-#include <thrust/device_vector.h>
 #include <thrust/gather.h>
 #include <thrust/scan.h>
 
 #include <cstdint>
 #include <vector>
-
-// This should not be necessary with RMM >= 0.18
-template <typename T>
-using device_vector = thrust::device_vector<T, rmm::mr::thrust_allocator<T>>;
 
 void gather_string_offsets(
   cudf::table_view table,
@@ -55,7 +50,7 @@ void gather_string_offsets(
   for (int ibatch = 0; ibatch < over_decom_factor; ibatch++) {
     size_t start_idx = ibatch * mpi_size;
     size_t end_idx   = (ibatch + 1) * mpi_size + 1;
-    device_vector<cudf::size_type> d_offset(&offsets[start_idx], &offsets[end_idx]);
+    rmm::device_vector<cudf::size_type> d_offset(&offsets[start_idx], &offsets[end_idx]);
 
     for (cudf::size_type icol = 0; icol < table.num_columns(); icol++) {
       // 1. If not a string column, push an empty vector
@@ -70,8 +65,8 @@ void gather_string_offsets(
       }
 
       // 2. Gather `string_send_offsets` from offset subcolumn and `offsets`
-      device_vector<cudf::size_type> d_string_send_offsets(mpi_size + 1);
-      thrust::gather(rmm::exec_policy(rmm::cuda_stream_default)->on(0),
+      rmm::device_vector<cudf::size_type> d_string_send_offsets(mpi_size + 1);
+      thrust::gather(rmm::exec_policy(),
                      d_offset.begin(),
                      d_offset.end(),
                      thrust::device_ptr<const cudf::size_type>(
@@ -105,7 +100,7 @@ void calculate_string_sizes_from_offsets(
 
     // Assume the first entry of the offset subcolumn is always 0
     thrust::adjacent_difference(
-      // rmm::exec_policy(rmm::cuda_stream_default)->on(0),
+      // rmm::exec_policy(rmm::cuda_stream_default),
       thrust::device_ptr<const cudf::size_type>(
         input_column.child(0).begin<const cudf::size_type>() + 1),
       thrust::device_ptr<const cudf::size_type>(input_column.child(0).end<cudf::size_type>()),
@@ -125,7 +120,7 @@ void calculate_string_offsets_from_sizes(
     const cudf::size_type *sizes_start = input_sizes[icol].data();
     const cudf::size_type *sizes_end   = sizes_start + nrows;
     thrust::inclusive_scan(
-      // rmm::exec_policy(rmm::cuda_stream_default)->on(0),
+      // rmm::exec_policy(rmm::cuda_stream_default),
       thrust::device_ptr<const cudf::size_type>(sizes_start),
       thrust::device_ptr<const cudf::size_type>(sizes_end),
       thrust::device_ptr<cudf::size_type>(

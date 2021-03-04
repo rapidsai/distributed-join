@@ -23,6 +23,7 @@
 #include <cudf/column/column_factories.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
+#include <rmm/exec_policy.hpp>
 #include <rmm/mr/device/managed_memory_resource.hpp>
 #include <rmm/mr/device/per_device_resource.hpp>
 
@@ -80,7 +81,7 @@ std::unique_ptr<cudf::table> generate_table(cudf::size_type nelements_per_gpu,
     cudf::make_numeric_column(cudf::data_type(cudf::type_id::INT32), nelements_per_gpu);
   int *key_buffer = key_column->mutable_view().head<int>();
   thrust::sequence(
-    rmm::exec_policy(0)->on(0), key_buffer, key_buffer + nelements_per_gpu, start_value, multiple);
+    rmm::exec_policy(), key_buffer, key_buffer + nelements_per_gpu, start_value, multiple);
 
   std::vector<std::unique_ptr<cudf::column>> new_table;
   new_table.push_back(std::move(key_column));

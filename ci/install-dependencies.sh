@@ -11,7 +11,7 @@ export PATH=${PATH}:/conda/bin
 cd /root
 conda create -y --name join
 source activate join
-conda install -y -c rapidsai -c nvidia -c conda-forge -c defaults cudf=0.17 python=3.8 cudatoolkit=11.0
+conda install -y -c rapidsai -c nvidia -c conda-forge -c defaults cudf=0.18 python=3.8 cudatoolkit=11.0
 conda install -y -c rapidsai -c nvidia -c conda-forge -c defaults ucx ucx-proc=*=gpu nccl openmpi
 conda install -y -c conda-forge -c defaults cmake
 

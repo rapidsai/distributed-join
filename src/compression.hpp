@@ -29,7 +29,7 @@
 #include <rmm/device_buffer.hpp>
 
 #include <cuda_runtime.h>
-#include <simt/type_traits>
+#include <cuda/std/type_traits>
 
 #include <cassert>
 #include <cstdint>
@@ -58,7 +58,7 @@ struct ColumnCompressionOptions {
 };
 
 template <typename T>
-using is_cascaded_supported = simt::std::disjunction<std::is_same<int8_t, T>,
+using is_cascaded_supported = cuda::std::disjunction<std::is_same<int8_t, T>,
                                                      std::is_same<uint8_t, T>,
                                                      std::is_same<int16_t, T>,
                                                      std::is_same<uint16_t, T>,
@@ -68,7 +68,7 @@ using is_cascaded_supported = simt::std::disjunction<std::is_same<int8_t, T>,
                                                      std::is_same<uint64_t, T>>;
 
 template <typename T>
-using is_time_t = simt::std::disjunction<cudf::is_timestamp_t<T>, cudf::is_duration_t<T>>;
+using is_time_t = cuda::std::disjunction<cudf::is_timestamp_t<T>, cudf::is_duration_t<T>>;
 
 struct compression_functor {
   /**
@@ -82,7 +82,7 @@ struct compression_functor {
    * @param[out] compressed_sizes Number of bytes for each buffer in *compressed_data*.
    * @param[in] streams CUDA streams used for the compression kernels.
    */
-  template <typename T, std::enable_if_t<!is_time_t<T>::value> * = nullptr>
+  template <typename T, std::enable_if_t<is_cascaded_supported<T>::value> * = nullptr>
   void operator()(std::vector<const void *> const &uncompressed_data,
                   std::vector<cudf::size_type> const &uncompressed_counts,
                   std::vector<rmm::device_buffer> &compressed_data,
@@ -158,6 +158,19 @@ struct compression_functor {
                                 streams,
                                 cascaded_format);
   }
+
+  // Checking whether the type is supported if necessary because T might be an incomplete type.
+  template <typename T,
+            std::enable_if_t<!is_cascaded_supported<T>::value && !is_time_t<T>::value> * = nullptr>
+  void operator()(std::vector<const void *> const &uncompressed_data,
+                  std::vector<cudf::size_type> const &uncompressed_counts,
+                  std::vector<rmm::device_buffer> &compressed_data,
+                  size_t *compressed_sizes,
+                  std::vector<rmm::cuda_stream_view> const &streams,
+                  nvcompCascadedFormatOpts cascaded_format)
+  {
+    throw std::runtime_error("Unsupported type for cascaded compressor");
+  }
 };
 
 struct decompression_functor {
@@ -169,7 +182,7 @@ struct decompression_functor {
    * @param[out] outputs Decompressed outputs. This argument needs to be preallocated.
    * @param[in] expected_output_counts Expected number of elements in the decompressed buffers.
    */
-  template <typename T, std::enable_if_t<!is_time_t<T>::value> * = nullptr>
+  template <typename T, std::enable_if_t<is_cascaded_supported<T>::value> * = nullptr>
   void operator()(std::vector<const void *> const &compressed_data,
                   std::vector<int64_t> const &compressed_sizes,
                   std::vector<void *> const &outputs,
@@ -222,6 +235,18 @@ struct decompression_functor {
     // If the data type is duration or time, use the corresponding arithmetic type
     operator()<typename T::rep>(
       compressed_data, compressed_sizes, outputs, expected_output_counts, streams);
+  }
+
+  // Checking whether the type is supported if necessary because T might be an incomplete type.
+  template <typename T,
+            std::enable_if_t<!is_cascaded_supported<T>::value && !is_time_t<T>::value> * = nullptr>
+  void operator()(std::vector<const void *> const &compressed_data,
+                  std::vector<int64_t> const &compressed_sizes,
+                  std::vector<void *> const &outputs,
+                  std::vector<int64_t> const &expected_output_counts,
+                  std::vector<rmm::cuda_stream_view> const &streams)
+  {
+    throw std::runtime_error("Unsupported type for cascaded decompressor");
   }
 };
 
