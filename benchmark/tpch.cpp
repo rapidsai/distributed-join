@@ -45,6 +45,7 @@ UCX_MEMTYPE_CACHE=n UCX_TLS=sm,cuda_copy,cuda_ipc mpirun -n 4 --cpus-per-rank 2 
 #include "../src/compression.hpp"
 #include "../src/distributed_join.hpp"
 #include "../src/setup.hpp"
+#include "utility.hpp"
 
 #include <cudf/column/column_view.hpp>
 #include <cudf/io/parquet.hpp>
@@ -122,24 +123,6 @@ void report_configuration()
   std::cout << std::endl;
   std::cout << "Compression: " << compression << std::endl;
   std::cout << "================================" << std::endl;
-}
-
-int64_t calculate_table_size(cudf::table_view input_table)
-{
-  int64_t table_size = 0;
-
-  for (cudf::size_type icol = 0; icol < input_table.num_columns(); icol++) {
-    cudf::column_view current_column = input_table.column(icol);
-    cudf::data_type dtype            = current_column.type();
-    if (cudf::is_fixed_width(dtype)) {
-      table_size += (cudf::size_of(dtype) * current_column.size());
-    } else {
-      assert(dtype.id() == cudf::type_id::STRING);
-      table_size += current_column.child(1).size();
-    }
-  }
-
-  return table_size;
 }
 
 int main(int argc, char *argv[])
