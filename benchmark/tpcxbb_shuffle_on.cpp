@@ -41,6 +41,7 @@ Parameters:
 #include <cuda_runtime.h>
 
 #include <dirent.h>
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
@@ -104,11 +105,10 @@ int main(int argc, char *argv[])
   CUDA_RT_CALL(
     cudaMallocHost(&preallocated_pinned_buffer, communicator->mpi_size * sizeof(size_t)));
 
-  // Get a vector of file names to read
+  // Get a vector of parquet file names in data_folder
 
-  int num_input_files                = 0;
-  constexpr int max_file_name_length = 100;
-  char file_name_template[max_file_name_length];
+  int num_input_files = 0;
+  std::vector<std::string> file_names;
 
   if (communicator->mpi_rank == 0) {
     DIR *data_folder = opendir(data_folderpath.c_str());
@@ -120,11 +120,9 @@ int main(int argc, char *argv[])
     struct dirent *next_entry;
     while ((next_entry = readdir(data_folder)) != NULL) {
       std::string file_name = next_entry->d_name;
-      if (file_name.rfind("part-", 0) == 0) {
-        // if the current file name starts with "part-"
-        if (num_input_files == 0) {
-          strncpy(file_name_template, file_name.c_str(), max_file_name_length);
-        }
+      if (file_name.find(".parquet") != std::string::npos) {
+        // if the current file name contains ".parquet"
+        file_names.push_back(file_name);
         num_input_files++;
       }
     }
@@ -132,29 +130,28 @@ int main(int argc, char *argv[])
   }
 
   MPI_CALL(MPI_Bcast(&num_input_files, 1, MPI_INT, 0, MPI_COMM_WORLD));
-  MPI_CALL(MPI_Bcast(file_name_template, max_file_name_length, MPI_CHAR, 0, MPI_COMM_WORLD));
 
-  std::vector<std::string> file_names;
+  constexpr int max_file_name_length = 100;
+  char file_name_bcast[max_file_name_length];
+  for (int ifile = 0; ifile < num_input_files; ifile++) {
+    if (communicator->mpi_rank == 0) {
+      strncpy(file_name_bcast, file_names[ifile].c_str(), max_file_name_length);
+    }
 
-  for (int ifile = 0; ifile < nfiles_per_rank; ifile++) {
-    int file_index = ifile * communicator->mpi_size + communicator->mpi_rank;
-    if (file_index >= num_input_files) break;
-
-    std::stringstream index_string_stream;
-    index_string_stream << std::setw(5) << std::setfill('0') << file_index;
-
-    std::string file_name(file_name_template);
-    file_name.replace(5, 5, index_string_stream.str());
-
-    file_names.push_back(file_name);
+    MPI_CALL(MPI_Bcast(file_name_bcast, max_file_name_length, MPI_CHAR, 0, MPI_COMM_WORLD));
+    if (communicator->mpi_rank != 0) { file_names.emplace_back(file_name_bcast); }
   }
+
+  std::sort(file_names.begin(), file_names.end());
 
   // Read parquet files
 
   std::vector<std::unique_ptr<table>> input_tables;
 
-  for (auto const &file_name : file_names) {
-    std::string filepath = data_folderpath + "/" + file_name;
+  for (int ifile = 0; ifile < nfiles_per_rank; ifile++) {
+    int file_index = ifile * communicator->mpi_size + communicator->mpi_rank;
+    if (file_index >= num_input_files) break;
+    std::string filepath = data_folderpath + "/" + file_names[file_index];
     cudf::io::parquet_reader_options cuio_options =
       cudf::io::parquet_reader_options::builder(cudf::io::source_info(filepath));
     cuio_options.set_columns(
@@ -193,6 +190,14 @@ int main(int argc, char *argv[])
 
   std::vector<ColumnCompressionOptions> compression_options =
     generate_compression_options_distributed(combined_input_filtered->view(), compression);
+
+  if (communicator->mpi_rank == 0) {
+    for (size_t icol = 0; icol < compression_options.size(); icol++) {
+      nvcompCascadedFormatOpts format = compression_options[icol].cascaded_format;
+      std::cout << "Column " << icol << " RLE=" << format.num_RLEs
+                << ", Delta=" << format.num_deltas << ", Bitpack=" << format.use_bp << std::endl;
+    }
+  }
 
   // Benchmark shuffle_on
 
