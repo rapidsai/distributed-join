@@ -26,6 +26,8 @@
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
 
+#include <mpi.h>
+
 #include <memory>
 #include <vector>
 
@@ -40,12 +42,17 @@ std::unique_ptr<cudf::table> shuffle_on(cudf::table_view const& input,
                                         bool report_timing,
                                         void* preallocated_pinned_buffer)
 {
-  int mpi_size = communicator->mpi_size;
+  int mpi_rank      = communicator->mpi_rank;
+  int mpi_size      = communicator->mpi_size;
+  double start_time = 0.0;
+  double stop_time  = 0.0;
 
   /* Hash partition */
 
   std::unique_ptr<table> hashed_input;
   vector<cudf::size_type> offsets;
+
+  if (report_timing) { start_time = MPI_Wtime(); }
 
   std::tie(hashed_input, offsets) =
     cudf::hash_partition(input, on_columns, mpi_size, hash_function);
@@ -53,6 +60,12 @@ std::unique_ptr<cudf::table> shuffle_on(cudf::table_view const& input,
   CUDA_RT_CALL(cudaStreamSynchronize(0));
 
   offsets.push_back(hashed_input->num_rows());
+
+  if (report_timing) {
+    stop_time = MPI_Wtime();
+    std::cout << "Rank " << mpi_rank << ": Hash partition takes " << (stop_time - start_time) * 1e3
+              << "ms" << std::endl;
+  }
 
   /* All_to_all communication */
 
