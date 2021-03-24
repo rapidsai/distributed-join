@@ -67,16 +67,17 @@ using std::chrono::milliseconds;
  * @param[in] report_timing Whether to print the local join time to stderr.
  * @param[in] mr RMM memory resource.
  */
-void inner_join_func(vector<std::unique_ptr<table>> &communicated_left,
-                     vector<std::unique_ptr<table>> &communicated_right,
-                     vector<std::unique_ptr<table>> &batch_join_results,
-                     vector<cudf::size_type> const &left_on,
-                     vector<cudf::size_type> const &right_on,
-                     vector<std::pair<cudf::size_type, cudf::size_type>> const &columns_in_common,
-                     vector<std::atomic<bool>> const &flags,
-                     Communicator *communicator,
-                     bool report_timing,
-                     rmm::mr::device_memory_resource *mr)
+static void inner_join_func(
+  vector<std::unique_ptr<table>> &communicated_left,
+  vector<std::unique_ptr<table>> &communicated_right,
+  vector<std::unique_ptr<table>> &batch_join_results,
+  vector<cudf::size_type> const &left_on,
+  vector<cudf::size_type> const &right_on,
+  vector<std::pair<cudf::size_type, cudf::size_type>> const &columns_in_common,
+  vector<std::atomic<bool>> const &flags,
+  Communicator *communicator,
+  bool report_timing,
+  rmm::mr::device_memory_resource *mr)
 {
   CUDA_RT_CALL(cudaSetDevice(communicator->current_device));
   rmm::mr::set_current_device_resource(mr);

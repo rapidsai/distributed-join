@@ -88,44 +88,6 @@ void communicate_sizes(std::vector<int64_t> const &send_offset,
 void communicate_sizes(std::vector<cudf::size_type> const &send_offset,
                        std::vector<int64_t> &recv_offset,
                        Communicator *communicator);
-/**
- * Send data from the current rank to other ranks according to offset.
- *
- * Note: This call should be enclosed by communicator->start() and communicator->stop().
- *
- * @param[in] data                The starting address of data to be sent in device buffer.
- * @param[in] offset              Vector of length mpi_size + 1. Items in *data* with indicies from
- * offset[i] to offset[i+1] will be sent to rank i.
- * @param[in] item_size           The size of each item.
- * @param[in] communicator        An instance of 'Communicator' used for communication.
- * @param[in] self_send           Whether sending data to itself. If this argument is false, items
- * in *data* destined for the current rank will not be copied.
- */
-void send_data_by_offset(const void *data,
-                         std::vector<int64_t> const &offset,
-                         size_t item_size,
-                         Communicator *communicator,
-                         bool self_send = true);
-
-/**
- * Receive data sent by 'send_data_by_offset'.
- *
- * Note: This call should be enclosed by communicator->start() and communicator->stop().
- *
- * @param[out] data         Items received from all ranks will be placed contiguously in *data*.
- *     This argument needs to be preallocated.
- * @param[in] offset        The items received from rank i will be stored at the start of
- * `data[offset[i]]`.
- * @param[in] item_size     The size of each item.
- * @param[in] communicator  An instance of 'Communicator' used for communication.
- * @param[in] self_recv     Whether recving data from itself. If this argument is false, items in
- *                          *data* from the current rank will not be received.
- */
-void recv_data_by_offset(void *data,
-                         std::vector<int64_t> const &offset,
-                         size_t item_size,
-                         Communicator *communicator,
-                         bool self_recv = true);
 
 void warmup_all_to_all(Communicator *communicator);
 

@@ -106,11 +106,24 @@ void communicate_sizes(std::vector<cudf::size_type> const &send_offset,
     std::vector<int64_t>(send_offset.begin(), send_offset.end()), recv_offset, communicator);
 }
 
-void send_data_by_offset(const void *data,
-                         std::vector<int64_t> const &offset,
-                         size_t item_size,
-                         Communicator *communicator,
-                         bool self_send)
+/**
+ * Send data from the current rank to other ranks according to offset.
+ *
+ * Note: This call should be enclosed by communicator->start() and communicator->stop().
+ *
+ * @param[in] data                The starting address of data to be sent in device buffer.
+ * @param[in] offset              Vector of length mpi_size + 1. Items in *data* with indicies from
+ * offset[i] to offset[i+1] will be sent to rank i.
+ * @param[in] item_size           The size of each item.
+ * @param[in] communicator        An instance of 'Communicator' used for communication.
+ * @param[in] self_send           Whether sending data to itself. If this argument is false, items
+ * in *data* destined for the current rank will not be copied.
+ */
+static void send_data_by_offset(const void *data,
+                                std::vector<int64_t> const &offset,
+                                size_t item_size,
+                                Communicator *communicator,
+                                bool self_send = true)
 {
   int mpi_rank = communicator->mpi_rank;
   int mpi_size = communicator->mpi_size;
@@ -129,11 +142,25 @@ void send_data_by_offset(const void *data,
   }
 }
 
-void recv_data_by_offset(void *data,
-                         std::vector<int64_t> const &offset,
-                         size_t item_size,
-                         Communicator *communicator,
-                         bool self_recv)
+/**
+ * Receive data sent by 'send_data_by_offset'.
+ *
+ * Note: This call should be enclosed by communicator->start() and communicator->stop().
+ *
+ * @param[out] data         Items received from all ranks will be placed contiguously in *data*.
+ *     This argument needs to be preallocated.
+ * @param[in] offset        The items received from rank i will be stored at the start of
+ * `data[offset[i]]`.
+ * @param[in] item_size     The size of each item.
+ * @param[in] communicator  An instance of 'Communicator' used for communication.
+ * @param[in] self_recv     Whether recving data from itself. If this argument is false, items in
+ *                          *data* from the current rank will not be received.
+ */
+static void recv_data_by_offset(void *data,
+                                std::vector<int64_t> const &offset,
+                                size_t item_size,
+                                Communicator *communicator,
+                                bool self_recv = true)
 {
   int mpi_rank = communicator->mpi_rank;
   int mpi_size = communicator->mpi_size;
@@ -509,11 +536,12 @@ void postprocess_all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buf
  * @param[out] communicated_table Vector of size `num_batches`, such that the ith element is the
  * allocated table of batch `i` after all-to-all communication.
  */
-void allocate_communicated_table_helper(cudf::table_view input_table,
-                                        vector<vector<int64_t>> const &recv_offsets,
-                                        vector<vector<vector<int64_t>>> const &string_recv_offsets,
-                                        const int over_decom_factor,
-                                        vector<std::unique_ptr<table>> &communicated_table)
+static void allocate_communicated_table_helper(
+  cudf::table_view input_table,
+  vector<vector<int64_t>> const &recv_offsets,
+  vector<vector<vector<int64_t>>> const &string_recv_offsets,
+  const int over_decom_factor,
+  vector<std::unique_ptr<table>> &communicated_table)
 {
   communicated_table.resize(over_decom_factor);
 
@@ -562,16 +590,16 @@ void allocate_communicated_table_helper(cudf::table_view input_table,
  * @param[in] string_sizes_recv Vector of size `(num_batches, num_columns)`, representing the
  * receive buffers for string sizes. This argument needs to be preallocated.
  */
-void copy_to_self(cudf::table_view input_table,
-                  vector<std::unique_ptr<table>> &communicated_tables,
-                  vector<cudf::size_type> const &send_offsets,
-                  vector<vector<int64_t>> const &recv_offsets,
-                  vector<vector<vector<cudf::size_type>>> const &string_send_offsets,
-                  vector<vector<vector<int64_t>>> const &string_recv_offsets,
-                  vector<rmm::device_uvector<cudf::size_type>> const &string_sizes_send,
-                  vector<vector<rmm::device_uvector<cudf::size_type>>> &string_sizes_recv,
-                  int over_decom_factor,
-                  Communicator *communicator)
+static void copy_to_self(cudf::table_view input_table,
+                         vector<std::unique_ptr<table>> &communicated_tables,
+                         vector<cudf::size_type> const &send_offsets,
+                         vector<vector<int64_t>> const &recv_offsets,
+                         vector<vector<vector<cudf::size_type>>> const &string_send_offsets,
+                         vector<vector<vector<int64_t>>> const &string_recv_offsets,
+                         vector<rmm::device_uvector<cudf::size_type>> const &string_sizes_send,
+                         vector<vector<rmm::device_uvector<cudf::size_type>>> &string_sizes_recv,
+                         int over_decom_factor,
+                         Communicator *communicator)
 {
   int mpi_rank = communicator->mpi_rank;
   int mpi_size = communicator->mpi_size;
