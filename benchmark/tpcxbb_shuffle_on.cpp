@@ -191,13 +191,7 @@ int main(int argc, char *argv[])
   std::vector<ColumnCompressionOptions> compression_options =
     generate_compression_options_distributed(combined_input_filtered->view(), compression);
 
-  if (communicator->mpi_rank == 0) {
-    for (size_t icol = 0; icol < compression_options.size(); icol++) {
-      nvcompCascadedFormatOpts format = compression_options[icol].cascaded_format;
-      std::cout << "Column " << icol << " RLE=" << format.num_RLEs
-                << ", Delta=" << format.num_deltas << ", Bitpack=" << format.use_bp << std::endl;
-    }
-  }
+  if (communicator->mpi_rank == 0) { print_compression_options(compression_options); }
 
   // Benchmark shuffle_on
 

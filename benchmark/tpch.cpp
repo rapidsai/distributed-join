@@ -199,6 +199,13 @@ int main(int argc, char *argv[])
   std::vector<ColumnCompressionOptions> lineitem_compression_options =
     generate_compression_options_distributed(lineitem_table.tbl->view(), compression);
 
+  if (communicator->mpi_rank == 0) {
+    std::cout << "Orders table compression options: " << std::endl;
+    print_compression_options(orders_compression_options);
+    std::cout << "Lineitem table compression options: " << std::endl;
+    print_compression_options(lineitem_compression_options);
+  }
+
   // Perform distributed join
 
   CUDA_RT_CALL(cudaDeviceSynchronize());

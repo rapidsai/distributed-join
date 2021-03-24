@@ -16,11 +16,16 @@
 
 #pragma once
 
+#include "../src/compression.hpp"
+
+#include <cascaded.hpp>
+
 #include <cudf/column/column_view.hpp>
 #include <cudf/table/table_view.hpp>
 #include <cudf/types.hpp>
 
 #include <cstdint>
+#include <vector>
 
 /**
  * Calculate the table sizes in bytes.
@@ -43,4 +48,13 @@ int64_t calculate_table_size(cudf::table_view input_table)
   }
 
   return table_size;
+}
+
+void print_compression_options(std::vector<ColumnCompressionOptions> &compression_options)
+{
+  for (size_t icol = 0; icol < compression_options.size(); icol++) {
+    nvcompCascadedFormatOpts format = compression_options[icol].cascaded_format;
+    std::cout << "Column " << icol << " RLE=" << format.num_RLEs << ", Delta=" << format.num_deltas
+              << ", Bitpack=" << format.use_bp << std::endl;
+  }
 }
