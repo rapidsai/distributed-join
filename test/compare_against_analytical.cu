@@ -41,12 +41,15 @@
 
 using cudf::table;
 
-__global__ void verify_correctness(const int *key, const int *col1, const int *col2, int size)
+__global__ void verify_correctness(
+  const int *col0, const int *col1, const int *col2, const int *col3, int size)
 {
   for (size_t i = threadIdx.x + blockDim.x * blockIdx.x; i < size; i += blockDim.x * gridDim.x) {
-    assert(key[i] % 15 == 0);
-    assert(col1[i] == key[i] / 3);
-    assert(col2[i] == key[i] / 5);
+    assert(col0[i] % 15 == 0);
+    assert(col1[i] == col0[i] / 3);
+    assert(col2[i] % 15 == 0);
+    assert(col3[i] == col2[i] / 5);
+    assert(col0[i] == col2[i]);
   }
 }
 
@@ -122,7 +125,6 @@ void run_test(cudf::size_type size,  // must be a multiple of 5
                                             local_right_table->view(),
                                             {0},
                                             {0},
-                                            {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
                                             communicator,
                                             left_compression_options,
                                             right_compression_options,
@@ -148,6 +150,7 @@ void run_test(cudf::size_type size,  // must be a multiple of 5
     verify_correctness<<<nblocks, block_size>>>(merged_table->get_column(0).view().head<int>(),
                                                 merged_table->get_column(1).view().head<int>(),
                                                 merged_table->get_column(2).view().head<int>(),
+                                                merged_table->get_column(3).view().head<int>(),
                                                 merged_table->num_rows());
 
     CUDA_RT_CALL(cudaDeviceSynchronize());

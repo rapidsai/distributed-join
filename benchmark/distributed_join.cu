@@ -209,18 +209,16 @@ int main(int argc, char *argv[])
   cudaProfilerStart();
   double start = MPI_Wtime();
 
-  std::unique_ptr<cudf::table> join_result =
-    distributed_inner_join(left->view(),
-                           right->view(),
-                           {0},
-                           {0},
-                           {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
-                           communicator,
-                           left_compression_options,
-                           right_compression_options,
-                           OVER_DECOMPOSITION_FACTOR,
-                           false,
-                           preallocated_pinned_buffer);
+  std::unique_ptr<cudf::table> join_result = distributed_inner_join(left->view(),
+                                                                    right->view(),
+                                                                    {0},
+                                                                    {0},
+                                                                    communicator,
+                                                                    left_compression_options,
+                                                                    right_compression_options,
+                                                                    OVER_DECOMPOSITION_FACTOR,
+                                                                    false,
+                                                                    preallocated_pinned_buffer);
 
   MPI_Barrier(MPI_COMM_WORLD);
   double stop = MPI_Wtime();

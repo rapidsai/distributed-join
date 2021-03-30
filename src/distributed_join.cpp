@@ -59,25 +59,20 @@ using std::chrono::milliseconds;
  * passed directly *cudf::inner_join*.
  * @param[in] right_on Column indices from the right table to join on. This argument will be
  * passed directly *cudf::inner_join*.
- * @param[in] columns_in_common Vector of pairs of column indices from the left and right table
- * that are in common and only one column will be produced in *batch_join_results*. This
- * argument will be passed directly *cudf::inner_join*.
  * @param[in] flags *flags[i]* is true if and only if the ith batch has finished the all-to-all
  *     communication.
  * @param[in] report_timing Whether to print the local join time to stderr.
  * @param[in] mr RMM memory resource.
  */
-static void inner_join_func(
-  vector<std::unique_ptr<table>> &communicated_left,
-  vector<std::unique_ptr<table>> &communicated_right,
-  vector<std::unique_ptr<table>> &batch_join_results,
-  vector<cudf::size_type> const &left_on,
-  vector<cudf::size_type> const &right_on,
-  vector<std::pair<cudf::size_type, cudf::size_type>> const &columns_in_common,
-  vector<std::atomic<bool>> const &flags,
-  Communicator *communicator,
-  bool report_timing,
-  rmm::mr::device_memory_resource *mr)
+static void inner_join_func(vector<std::unique_ptr<table>> &communicated_left,
+                            vector<std::unique_ptr<table>> &communicated_right,
+                            vector<std::unique_ptr<table>> &batch_join_results,
+                            vector<cudf::size_type> const &left_on,
+                            vector<cudf::size_type> const &right_on,
+                            vector<std::atomic<bool>> const &flags,
+                            Communicator *communicator,
+                            bool report_timing,
+                            rmm::mr::device_memory_resource *mr)
 {
   CUDA_RT_CALL(cudaSetDevice(communicator->current_device));
   rmm::mr::set_current_device_resource(mr);
@@ -94,11 +89,8 @@ static void inner_join_func(
     if (communicated_left[ibatch]->num_rows() && communicated_right[ibatch]->num_rows()) {
       // Perform local join only when both left and right tables are not empty.
       // If either is empty, cuDF's inner join will return the other table, which is not desired.
-      batch_join_results[ibatch] = cudf::inner_join(communicated_left[ibatch]->view(),
-                                                    communicated_right[ibatch]->view(),
-                                                    left_on,
-                                                    right_on,
-                                                    columns_in_common);
+      batch_join_results[ibatch] = cudf::inner_join(
+        communicated_left[ibatch]->view(), communicated_right[ibatch]->view(), left_on, right_on);
     } else {
       batch_join_results[ibatch] = std::make_unique<table>();
     }
@@ -117,7 +109,6 @@ std::unique_ptr<table> distributed_inner_join(
   cudf::table_view const &right,
   vector<cudf::size_type> const &left_on,
   vector<cudf::size_type> const &right_on,
-  vector<std::pair<cudf::size_type, cudf::size_type>> const &columns_in_common,
   Communicator *communicator,
   vector<ColumnCompressionOptions> left_compression_options,
   vector<ColumnCompressionOptions> right_compression_options,
@@ -202,7 +193,6 @@ std::unique_ptr<table> distributed_inner_join(
                                 std::ref(batch_join_results),
                                 left_on,
                                 right_on,
-                                columns_in_common,
                                 std::ref(flags),
                                 communicator,
                                 report_timing,

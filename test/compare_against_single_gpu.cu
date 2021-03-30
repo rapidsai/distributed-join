@@ -124,8 +124,7 @@ void run_test(cudf::size_type build_table_size,
     build_view = build->view();
     probe_view = probe->view();
 
-    reference = cudf::inner_join(
-      build->view(), probe->view(), {0}, {0}, {std::pair<cudf::size_type, cudf::size_type>(0, 0)});
+    reference = cudf::inner_join(build->view(), probe->view(), {0}, {0});
   }
 
   std::unique_ptr<table> local_build = distribute_table(build_view, communicator);
@@ -140,16 +139,14 @@ void run_test(cudf::size_type build_table_size,
 
   /* Distributed join */
 
-  std::unique_ptr<table> join_result_all_ranks =
-    distributed_inner_join(local_build->view(),
-                           local_probe->view(),
-                           {0},
-                           {0},
-                           {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
-                           communicator,
-                           build_compression_options,
-                           probe_compression_options,
-                           over_decomposition_factor);
+  std::unique_ptr<table> join_result_all_ranks = distributed_inner_join(local_build->view(),
+                                                                        local_probe->view(),
+                                                                        {0},
+                                                                        {0},
+                                                                        communicator,
+                                                                        build_compression_options,
+                                                                        probe_compression_options,
+                                                                        over_decomposition_factor);
 
   /* Send join result from all ranks to the root rank */
 
@@ -158,6 +155,11 @@ void run_test(cudf::size_type build_table_size,
   /* Verify correctness */
 
   if (mpi_rank == 0) {
+    // Compare the number of columns
+    cudf::size_type ncols = reference->num_columns();
+    assert(join_result->num_columns() == ncols);
+    assert(ncols == 4);
+
     // Although join_result and reference should contain the same table, rows may be reordered.
     // Therefore, we first sort both tables and then compare
 
@@ -175,25 +177,28 @@ void run_test(cudf::size_type build_table_size,
     CUDA_RT_CALL(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
       &nblocks, verify_correctness<KEY_T>, block_size, 0));
 
-    // There should be three columns in the result table. The first column is the joined key
-    // column. The second and third column comes from the payload column from the left and
-    // the right input table, respectively.
-
-    // Verify the first column (key column) is correct.
+    // There should be four columns in the result table. The first two columns are from the left
+    // table, and the last two columns are from the right table.
 
     verify_correctness<KEY_T>
       <<<nblocks, block_size>>>(join_sorted->view().column(0).head<KEY_T>(),
                                 reference_sorted->view().column(0).head<KEY_T>(),
                                 nrows);
 
-    // Verify the remaining two payload columns are correct.
+    verify_correctness<PAYLOAD_T>
+      <<<nblocks, block_size>>>(join_sorted->view().column(1).head<PAYLOAD_T>(),
+                                reference_sorted->view().column(1).head<PAYLOAD_T>(),
+                                nrows);
 
-    for (cudf::size_type icol = 1; icol <= 2; icol++) {
-      verify_correctness<PAYLOAD_T>
-        <<<nblocks, block_size>>>(join_sorted->view().column(icol).head<PAYLOAD_T>(),
-                                  reference_sorted->view().column(icol).head<PAYLOAD_T>(),
-                                  nrows);
-    }
+    verify_correctness<KEY_T>
+      <<<nblocks, block_size>>>(join_sorted->view().column(2).head<KEY_T>(),
+                                reference_sorted->view().column(2).head<KEY_T>(),
+                                nrows);
+
+    verify_correctness<PAYLOAD_T>
+      <<<nblocks, block_size>>>(join_sorted->view().column(3).head<PAYLOAD_T>(),
+                                reference_sorted->view().column(3).head<PAYLOAD_T>(),
+                                nrows);
 
     CUDA_RT_CALL(cudaDeviceSynchronize());
 

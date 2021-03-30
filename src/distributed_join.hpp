@@ -46,12 +46,6 @@
  * @param[in] right_on The column indices from `right` to join on.
  * The column from `right` indicated by `right_on[i]` will be compared against the column
  * from `left` indicated by `left_on[i]`.
- * @param[in] columns_in_common is a vector of pairs of column indices into
- * `left` and `right`, respectively, that are "in common". For "common"
- * columns, only a single output column will be produced, which is gathered
- * from `left_on` columns. Else, for every column in `left_on` and `right_on`,
- * an output column will be produced.  For each of these pairs (L, R), L
- * should exist in `left_on` and R should exist in `right_on`.
  * @param[in] communicator An instance of `Communicator` used for communication.
  * @param[in] left_compression_options Vector of length equal to the number of columns in *left*,
  * indicating whether/how each column of the left table needs to be compressed before communication.
@@ -73,7 +67,6 @@ std::unique_ptr<cudf::table> distributed_inner_join(
   cudf::table_view const &right,
   std::vector<cudf::size_type> const &left_on,
   std::vector<cudf::size_type> const &right_on,
-  std::vector<std::pair<cudf::size_type, cudf::size_type>> const &columns_in_common,
   Communicator *communicator,
   std::vector<ColumnCompressionOptions> left_compression_options,
   std::vector<ColumnCompressionOptions> right_compression_options,

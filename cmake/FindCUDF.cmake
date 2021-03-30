@@ -14,15 +14,7 @@
 #
 
 find_path(CUDF_INCLUDE_DIR NAMES cudf/join.hpp)
-
-set(CUDF_LIBRARY_NAMES cudf cudf_base cudf_join cudf_hash cudf_partitioning cudf_io)
-set(CUDF_LIBRARIES "")
-foreach(CUDF_LIBRARY_NAME ${CUDF_LIBRARY_NAMES})
-  find_library(${CUDF_LIBRARY_NAME}_LIBRARY NAMES ${CUDF_LIBRARY_NAME} REQUIRED)
-  list(APPEND CUDF_LIBRARIES ${${CUDF_LIBRARY_NAME}_LIBRARY})
-endforeach()
-
-get_filename_component(CUDF_LIBPATH ${cudf_LIBRARY} DIRECTORY)
+find_library(CUDF_LIBRARIES NAMES cudf REQUIRED)
 
 include(${CMAKE_ROOT}/Modules/FindPackageHandleStandardArgs.cmake)
 find_package_handle_standard_args(CUDF DEFAULT_MSG CUDF_LIBRARIES CUDF_INCLUDE_DIR)

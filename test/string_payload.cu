@@ -23,6 +23,8 @@
 #include <cudf/column/column_factories.hpp>
 #include <cudf/table/table.hpp>
 #include <cudf/types.hpp>
+#include <cudf/utilities/span.hpp>
+#include <rmm/device_vector.hpp>
 #include <rmm/exec_policy.hpp>
 #include <rmm/mr/device/managed_memory_resource.hpp>
 #include <rmm/mr/device/per_device_resource.hpp>
@@ -57,8 +59,8 @@ std::unique_ptr<cudf::table> generate_table(cudf::size_type nelements_per_gpu,
   }
 
   // Allocate buffers for the string column
-  std::vector<char> strings(string_column_size);
-  std::vector<cudf::size_type> offsets(nelements_per_gpu + 1);
+  rmm::device_vector<char> strings(string_column_size);
+  rmm::device_vector<cudf::size_type> offsets(nelements_per_gpu + 1);
 
   // Second pass, fill the string subcolumn
   cudf::size_type current_offset = 0;
@@ -67,14 +69,15 @@ std::unique_ptr<cudf::table> generate_table(cudf::size_type nelements_per_gpu,
     int current_size  = current_value % 7 + 1;
     char current_char = 'a' + current_value % 26;
     offsets[ielement] = current_offset;
-    memset(strings.data() + current_offset, current_char, current_size);
+    memset(thrust::raw_pointer_cast(strings.data() + current_offset), current_char, current_size);
     current_offset += current_size;
   }
 
   offsets[nelements_per_gpu] = current_offset;
 
   // Construct the payload column
-  std::unique_ptr<cudf::column> payload_column = cudf::make_strings_column(strings, offsets);
+  std::unique_ptr<cudf::column> payload_column = cudf::make_strings_column(
+    cudf::device_span<char>(strings), cudf::device_span<cudf::size_type>(offsets));
 
   // Construct the key column
   std::unique_ptr<cudf::column> key_column =
@@ -88,6 +91,18 @@ std::unique_ptr<cudf::table> generate_table(cudf::size_type nelements_per_gpu,
   new_table.push_back(std::move(payload_column));
 
   return std::make_unique<cudf::table>(std::move(new_table));
+}
+
+inline void check_payload_correctness(cudf::column_view payload_column,
+                                      cudf::size_type irow,
+                                      int key)
+{
+  cudf::size_type start_idx = *(payload_column.child(0).begin<cudf::size_type>() + irow);
+  cudf::size_type end_idx   = *(payload_column.child(0).begin<cudf::size_type>() + irow + 1);
+  assert(end_idx - start_idx == key % 7 + 1);
+
+  for (; start_idx < end_idx; start_idx++)
+    assert(*(payload_column.child(1).begin<char>() + start_idx) == 'a' + key % 26);
 }
 
 void run_test(cudf::size_type nelements_per_gpu, bool compression, Communicator *communicator)
@@ -112,11 +127,12 @@ void run_test(cudf::size_type nelements_per_gpu, bool compression, Communicator 
                                             right_table->view(),
                                             {0},
                                             {0},
-                                            {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
                                             communicator,
                                             left_compression_options,
                                             right_compression_options,
                                             1);
+
+  assert(join_result->num_columns() == 4);
 
   int num_rows = join_result->num_rows();
   int total_nrows;
@@ -126,18 +142,18 @@ void run_test(cudf::size_type nelements_per_gpu, bool compression, Communicator 
 
   if (num_rows == 0) return;
 
-  cudf::column_view key_column     = join_result->view().column(0);
-  cudf::column_view payload_column = join_result->view().column(1);
+  cudf::column_view column0 = join_result->view().column(0);
+  cudf::column_view column1 = join_result->view().column(1);
+  cudf::column_view column2 = join_result->view().column(2);
+  cudf::column_view column3 = join_result->view().column(3);
 
   for (cudf::size_type irow = 0; irow < num_rows; irow++) {
-    int key = *(key_column.begin<int>() + irow);
+    int key = *(column0.begin<int>() + irow);
     assert(key % 15 == 0);
-    cudf::size_type start_idx = *(payload_column.child(0).begin<cudf::size_type>() + irow);
-    cudf::size_type end_idx   = *(payload_column.child(0).begin<cudf::size_type>() + irow + 1);
-    assert(end_idx - start_idx == key % 7 + 1);
+    assert(key == *(column2.begin<int>() + irow));
 
-    for (; start_idx < end_idx; start_idx++)
-      assert(*(payload_column.child(1).begin<char>() + start_idx) == 'a' + key % 26);
+    check_payload_correctness(column1, irow, key);
+    check_payload_correctness(column3, irow, key);
   }
 }
 

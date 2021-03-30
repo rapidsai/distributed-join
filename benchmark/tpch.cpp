@@ -216,7 +216,6 @@ int main(int argc, char *argv[])
                                             lineitem_table.tbl->view(),
                                             {0},
                                             {0},
-                                            {std::pair<cudf::size_type, cudf::size_type>(0, 0)},
                                             communicator,
                                             orders_compression_options,
                                             lineitem_compression_options,
