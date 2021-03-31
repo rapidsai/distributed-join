@@ -64,7 +64,7 @@ void setup_memory_pool_and_communicator(
   // Calculate the memory pool size
   size_t free_memory, total_memory;
   CUDA_RT_CALL(cudaMemGetInfo(&free_memory, &total_memory));
-  const size_t pool_size = free_memory - 5LL * (1LL << 29);  // free memory - 500MB
+  const size_t pool_size = free_memory / 284 * 256;
 
   if (communicator_name == "NCCL") {
     communicator = new NCCLCommunicator;

@@ -615,8 +615,9 @@ static void copy_to_self(cudf::table_view input_table,
           static_cast<void *>(
             communicated_tables[ibatch]->mutable_view().column(icol).head<char>() +
             recv_offsets[ibatch][mpi_rank] * dtype_size),
-          static_cast<const void *>(input_table.column(icol).head<char>() +
-                                    send_offsets[ibatch * mpi_size + mpi_rank] * dtype_size),
+          static_cast<const void *>(
+            input_table.column(icol).head<char>() +
+            static_cast<int64_t>(send_offsets[ibatch * mpi_size + mpi_rank]) * dtype_size),
           (recv_offsets[ibatch][mpi_rank + 1] - recv_offsets[ibatch][mpi_rank]) * dtype_size,
           cudaMemcpyDeviceToDevice));
       } else {

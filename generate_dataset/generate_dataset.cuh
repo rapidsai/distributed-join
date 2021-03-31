@@ -19,7 +19,7 @@
 #include "../src/error.hpp"
 #include "nvtx_helper.cuh"
 
-#include <rmm/thrust_rmm_allocator.h>
+#include <rmm/exec_policy.hpp>
 
 #include <thrust/distance.h>
 #include <thrust/iterator/counting_iterator.h>
@@ -230,7 +230,7 @@ void generate_input_tables(key_type* const build_tbl,
                           build_tbl_size * sizeof(key_type),
                           cudaMemcpyDeviceToDevice));
 
-  thrust::sort(thrust::device, build_tbl_sorted.begin(), build_tbl_sorted.end());
+  thrust::sort(rmm::exec_policy(), build_tbl_sorted.begin(), build_tbl_sorted.end());
 
   // Exclude keys used in build table from lottery
   thrust::counting_iterator<key_type> first_lottery_elem(0);
