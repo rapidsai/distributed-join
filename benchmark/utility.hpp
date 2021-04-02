@@ -32,7 +32,7 @@
  *
  * Note: This function only support tables with fixed-width and string columns.
  */
-int64_t calculate_table_size(cudf::table_view input_table)
+inline int64_t calculate_table_size(cudf::table_view input_table)
 {
   int64_t table_size = 0;
 
@@ -50,7 +50,7 @@ int64_t calculate_table_size(cudf::table_view input_table)
   return table_size;
 }
 
-void print_compression_options(std::vector<ColumnCompressionOptions> &compression_options)
+inline void print_compression_options(std::vector<ColumnCompressionOptions> &compression_options)
 {
   for (size_t icol = 0; icol < compression_options.size(); icol++) {
     nvcompCascadedFormatOpts format = compression_options[icol].cascaded_format;
