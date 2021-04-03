@@ -15,12 +15,12 @@
  */
 
 /*
-This benchmark tests shuffle performance on TPCx-BB "webstream" table.
+This benchmark tests shuffle performance on TPCx-BB "web_clickstreams" table.
 
 Parameters:
---data-folder      Forder containing the parquet files of TPCx-BB "webstream" table.
+--data-folder      Forder containing the parquet files of TPCx-BB "web_clickstreams" table.
 --nfiles-per-rank  Number of Parquet files read for input on each rank.
---compression      If specified, compressed data before all-to-all communication.
+--compression      If specified, compress data before all-to-all communication.
 */
 
 #include "../src/all_to_all_comm.hpp"
