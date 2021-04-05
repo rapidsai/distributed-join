@@ -112,14 +112,19 @@ void get_parquet_file_names(const char *folderpath,
       exit(EXIT_FAILURE);
     }
 
-    struct dirent *next_entry;
-    while ((next_entry = readdir(data_folder)) != NULL) {
-      std::string file_name = next_entry->d_name;
-      if (file_name.find(".parquet") != std::string::npos) {
-        // if the current file name contains ".parquet"
-        file_names.push_back(file_name);
-        num_input_files++;
+    try {
+      struct dirent *next_entry;
+      while ((next_entry = readdir(data_folder)) != NULL) {
+        std::string file_name = next_entry->d_name;
+        if (file_name.find(".parquet") != std::string::npos) {
+          // if the current file name contains ".parquet"
+          file_names.push_back(file_name);
+          num_input_files++;
+        }
       }
+    } catch (...) {
+      closedir(data_folder);
+      throw;
     }
     closedir(data_folder);
   }
