@@ -36,9 +36,8 @@ inline int64_t calculate_table_size(cudf::table_view input_table)
 {
   int64_t table_size = 0;
 
-  for (cudf::size_type icol = 0; icol < input_table.num_columns(); icol++) {
-    cudf::column_view current_column = input_table.column(icol);
-    cudf::data_type dtype            = current_column.type();
+  for (auto &current_column : input_table) {
+    cudf::data_type dtype = current_column.type();
     if (cudf::is_fixed_width(dtype)) {
       table_size += (cudf::size_of(dtype) * current_column.size());
     } else {

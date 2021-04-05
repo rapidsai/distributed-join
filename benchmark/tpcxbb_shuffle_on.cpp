@@ -82,6 +82,68 @@ void report_configuration()
   std::cout << "================================" << std::endl;
 }
 
+/**
+ * Get a vector of sorted parquet file names in folder specified by *folderpath*.
+ *
+ * In this function, only the root rank will query the filesystem, and the result file names are
+ * broadcasted to all worker ranks. Therefore, this function needs to be called collectively by all
+ * ranks in MPI_COMM_WORLD.
+ *
+ * @param[in] folderpath Path to the folder to be queried.
+ * @param[out] num_input_files Number of Parquet files in *folderpath*.
+ * @param[out] file_names Parquet file names in *folderpath*.
+ */
+void get_parquet_file_names(const char *folderpath,
+                            int &num_input_files,
+                            std::vector<std::string> &file_names)
+{
+  int mpi_rank;
+  MPI_CALL(MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank));
+
+  num_input_files = 0;
+  file_names.clear();
+
+  // Query parquet file names in *folderpath* on the root rank and store in *file_names*
+
+  if (mpi_rank == 0) {
+    DIR *data_folder = opendir(folderpath);
+    if (!data_folder) {
+      std::cerr << "Cannot open directory\n";
+      exit(EXIT_FAILURE);
+    }
+
+    struct dirent *next_entry;
+    while ((next_entry = readdir(data_folder)) != NULL) {
+      std::string file_name = next_entry->d_name;
+      if (file_name.find(".parquet") != std::string::npos) {
+        // if the current file name contains ".parquet"
+        file_names.push_back(file_name);
+        num_input_files++;
+      }
+    }
+    closedir(data_folder);
+  }
+
+  // Broadcast the file names from the root rank to all worker ranks
+
+  MPI_CALL(MPI_Bcast(&num_input_files, 1, MPI_INT, 0, MPI_COMM_WORLD));
+
+  constexpr int max_file_name_length = 100;
+  char file_name_bcast[max_file_name_length];
+  for (int ifile = 0; ifile < num_input_files; ifile++) {
+    if (mpi_rank == 0) {
+      strncpy(file_name_bcast, file_names[ifile].c_str(), max_file_name_length);
+    }
+
+    // Each file name is broadcasted to *file_name_bcast*, and then each worker rank adds it to
+    // *file_names*.
+    MPI_CALL(MPI_Bcast(file_name_bcast, max_file_name_length, MPI_CHAR, 0, MPI_COMM_WORLD));
+    if (mpi_rank != 0) { file_names.emplace_back(file_name_bcast); }
+  }
+
+  std::sort(file_names.begin(), file_names.end());
+}
+
 int main(int argc, char *argv[])
 {
   MPI_CALL(MPI_Init(&argc, &argv));
@@ -107,42 +169,10 @@ int main(int argc, char *argv[])
 
   // Get a vector of parquet file names in data_folder
 
-  int num_input_files = 0;
+  int num_input_files;
   std::vector<std::string> file_names;
 
-  if (communicator->mpi_rank == 0) {
-    DIR *data_folder = opendir(data_folderpath.c_str());
-    if (!data_folder) {
-      std::cerr << "Cannot open directory\n";
-      return EXIT_FAILURE;
-    }
-
-    struct dirent *next_entry;
-    while ((next_entry = readdir(data_folder)) != NULL) {
-      std::string file_name = next_entry->d_name;
-      if (file_name.find(".parquet") != std::string::npos) {
-        // if the current file name contains ".parquet"
-        file_names.push_back(file_name);
-        num_input_files++;
-      }
-    }
-    closedir(data_folder);
-  }
-
-  MPI_CALL(MPI_Bcast(&num_input_files, 1, MPI_INT, 0, MPI_COMM_WORLD));
-
-  constexpr int max_file_name_length = 100;
-  char file_name_bcast[max_file_name_length];
-  for (int ifile = 0; ifile < num_input_files; ifile++) {
-    if (communicator->mpi_rank == 0) {
-      strncpy(file_name_bcast, file_names[ifile].c_str(), max_file_name_length);
-    }
-
-    MPI_CALL(MPI_Bcast(file_name_bcast, max_file_name_length, MPI_CHAR, 0, MPI_COMM_WORLD));
-    if (communicator->mpi_rank != 0) { file_names.emplace_back(file_name_bcast); }
-  }
-
-  std::sort(file_names.begin(), file_names.end());
+  get_parquet_file_names(data_folderpath.c_str(), num_input_files, file_names);
 
   // Read parquet files
 
