@@ -5,8 +5,8 @@ lrank=$OMPI_COMM_WORLD_LOCAL_RANK
 
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 
-# APP="benchmark/all_to_all --repeat 1"
-APP="benchmark/distributed_join"
+# APP="build/bin/benchmark/all_to_all --repeat 1"
+APP="build/bin/benchmark/distributed_join"
 
 # this is the list of GPUs we have
 GPUS=(0 1 2 3 4 5 6 7)

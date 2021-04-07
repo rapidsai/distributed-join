@@ -13,16 +13,16 @@ ENV PATH=${PATH}:/conda/bin
 SHELL ["/bin/bash", "-c"]
 
 # Setup cuDF
-RUN git clone https://github.com/gaohao95/cudf.git /cudf \
+RUN git clone https://github.com/rapidsai/cudf.git /cudf \
     && cd /cudf \
-    && git checkout branch-0.18 \
+    && git checkout branch-0.19 \
     && git submodule update --init --remote --recursive \
     && conda env create --name cudf_dev --file conda/environments/cudf_dev_cuda11.0.yml \
     && source activate cudf_dev \
     && conda install -c rapidsai -c nvidia -c conda-forge -c defaults -y openmpi cmake \
     && mkdir -p cpp/build \
     && cd cpp/build \
-    && cmake .. -DCMAKE_INSTALL_PREFIX=${CONDA_PREFIX} -DGPU_ARCHS="70;80" \
+    && cmake .. -DCMAKE_INSTALL_PREFIX=${CONDA_PREFIX} -DCMAKE_CUDA_ARCHITECTURES="70;80" \
     && make -j install \
     && conda clean -a -y
 ENV CUDF_ROOT=/conda/envs/cudf_dev

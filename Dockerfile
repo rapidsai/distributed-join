@@ -15,8 +15,8 @@ SHELL ["/bin/bash", "-c"]
 # Setup cuDF
 RUN conda create --name cudf_release \
     && source activate cudf_release \
-    && conda install -c rapidsai -c nvidia -c conda-forge -c defaults -y \
-        cudf=0.18 \
+    && conda install -c rapidsai-nightly -c nvidia -c conda-forge -c defaults -y \
+        cudf=0.19 \
         python=3.8 \
         cudatoolkit=11.0 \
         openmpi \
