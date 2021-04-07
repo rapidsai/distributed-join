@@ -117,8 +117,6 @@ Rank 6 select 6/8 GPU
 ========== Parameters ==========
 Key type: int64_t
 Payload type: int64_t
-Device count: 8
-Rank 5 select 5/8 GPU
 Number of rows in the build table: 800 million
 Number of rows in the probe table: 800 million
 Selectivity: 0.3
