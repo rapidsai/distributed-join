@@ -35,57 +35,51 @@
 #include <cstdint>
 #include <vector>
 
-void gather_string_offsets(
-  cudf::table_view table,
-  std::vector<cudf::size_type> const &offsets,
-  const int over_decom_factor,
-  std::vector<std::vector<std::vector<cudf::size_type>>> &string_send_offsets,
-  std::vector<std::vector<std::vector<int64_t>>> &string_recv_offsets,
-  Communicator *communicator)
+void gather_string_offsets(cudf::table_view table,
+                           std::vector<cudf::size_type> const &offsets,
+                           std::vector<std::vector<cudf::size_type>> &string_send_offsets,
+                           std::vector<std::vector<int64_t>> &string_recv_offsets,
+                           Communicator *communicator)
 {
   int mpi_size = communicator->mpi_size;
-  string_send_offsets.resize(over_decom_factor);
-  string_recv_offsets.resize(over_decom_factor);
 
-  for (int ibatch = 0; ibatch < over_decom_factor; ibatch++) {
-    size_t start_idx = ibatch * mpi_size;
-    size_t end_idx   = (ibatch + 1) * mpi_size + 1;
-    rmm::device_vector<cudf::size_type> d_offset(&offsets[start_idx], &offsets[end_idx]);
+  rmm::device_vector<cudf::size_type> d_offsets(offsets);
 
-    for (cudf::size_type icol = 0; icol < table.num_columns(); icol++) {
-      // 1. If not a string column, push an empty vector
-      cudf::data_type dtype = table.column(icol).type();
-      if (dtype.id() != cudf::type_id::STRING) {
-        string_send_offsets[ibatch].emplace_back();
-        string_recv_offsets[ibatch].emplace_back();
-        continue;
-      } else {
-        string_send_offsets[ibatch].emplace_back(mpi_size + 1);
-        string_recv_offsets[ibatch].emplace_back(mpi_size + 1);
-      }
-
-      // 2. Gather `string_send_offsets` from offset subcolumn and `offsets`
-      rmm::device_vector<cudf::size_type> d_string_send_offsets(mpi_size + 1);
-      thrust::gather(rmm::exec_policy(),
-                     d_offset.begin(),
-                     d_offset.end(),
-                     thrust::device_ptr<const cudf::size_type>(
-                       table.column(icol).child(0).head<cudf::size_type>()),
-                     d_string_send_offsets.begin());
-      CUDA_RT_CALL(cudaMemcpy(string_send_offsets[ibatch][icol].data(),
-                              thrust::raw_pointer_cast(d_string_send_offsets.data()),
-                              (mpi_size + 1) * sizeof(cudf::size_type),
-                              cudaMemcpyDeviceToHost));
-
-      // 3. Communicate string_send_offsets and receive string_recv_offsets
-      communicate_sizes(
-        string_send_offsets[ibatch][icol], string_recv_offsets[ibatch][icol], communicator);
+  for (cudf::size_type icol = 0; icol < table.num_columns(); icol++) {
+    // 1. If not a string column, push an empty vector
+    cudf::data_type dtype = table.column(icol).type();
+    if (dtype.id() != cudf::type_id::STRING) {
+      string_send_offsets.emplace_back();
+      string_recv_offsets.emplace_back();
+      continue;
+    } else {
+      string_send_offsets.emplace_back(mpi_size + 1);
+      string_recv_offsets.emplace_back(mpi_size + 1);
     }
+
+    // 2. Gather `string_send_offsets` using the offset subcolumn and `d_offsets`
+    rmm::device_vector<cudf::size_type> d_string_send_offsets(mpi_size + 1);
+    thrust::gather(rmm::exec_policy(),
+                   d_offsets.begin(),
+                   d_offsets.end(),
+                   thrust::device_ptr<const cudf::size_type>(
+                     table.column(icol).child(0).head<cudf::size_type>()),
+                   d_string_send_offsets.begin());
+    CUDA_RT_CALL(cudaMemcpy(string_send_offsets[icol].data(),
+                            thrust::raw_pointer_cast(d_string_send_offsets.data()),
+                            (mpi_size + 1) * sizeof(cudf::size_type),
+                            cudaMemcpyDeviceToHost));
+
+    // 3. Communicate string_send_offsets and receive string_recv_offsets
+    communicate_sizes(string_send_offsets[icol], string_recv_offsets[icol], communicator);
   }
 }
 
 void calculate_string_sizes_from_offsets(
-  cudf::table_view input_table, std::vector<rmm::device_uvector<cudf::size_type>> &output_sizes)
+  cudf::table_view input_table,
+  cudf::size_type begin,
+  cudf::size_type end,
+  std::vector<rmm::device_uvector<cudf::size_type>> &output_sizes)
 {
   output_sizes.clear();
 
@@ -96,15 +90,27 @@ void calculate_string_sizes_from_offsets(
       continue;
     }
 
-    output_sizes.emplace_back(input_column.size(), rmm::cuda_stream_default);
+    output_sizes.emplace_back(end - begin, rmm::cuda_stream_default);
 
-    // Assume the first entry of the offset subcolumn is always 0
+    // thrust::adjacent_difference will copy the first element to the output, which we do not want
+    // here. To get around this problem, thrust::adjacent_difference will write to a temporary
+    // buffer, and we will copy from the temporary buffer to `output_sizes` starting at the second
+    // element.
+
+    rmm::device_uvector<cudf::size_type> temp_buffer(end - begin + 1, rmm::cuda_stream_default);
+
     thrust::adjacent_difference(
       // rmm::exec_policy(rmm::cuda_stream_default),
       thrust::device_ptr<const cudf::size_type>(
-        input_column.child(0).begin<const cudf::size_type>() + 1),
-      thrust::device_ptr<const cudf::size_type>(input_column.child(0).end<cudf::size_type>()),
-      thrust::device_ptr<cudf::size_type>(output_sizes[icol].data()));
+        input_column.child(0).begin<const cudf::size_type>() + begin),
+      thrust::device_ptr<const cudf::size_type>(
+        input_column.child(0).begin<const cudf::size_type>() + end + 1),
+      temp_buffer.begin());
+
+    CUDA_RT_CALL(cudaMemcpy(output_sizes[icol].data(),
+                            temp_buffer.data() + 1,
+                            (end - begin) * sizeof(cudf::size_type),
+                            cudaMemcpyDeviceToDevice));
   }
 }
 
@@ -132,21 +138,14 @@ void calculate_string_offsets_from_sizes(
 
 void allocate_string_sizes_receive_buffer(
   cudf::table_view input_table,
-  int over_decom_factor,
-  std::vector<std::vector<int64_t>> recv_offsets,
-  std::vector<std::vector<rmm::device_uvector<cudf::size_type>>> &string_sizes_recv)
+  std::vector<int64_t> recv_offsets,
+  std::vector<rmm::device_uvector<cudf::size_type>> &string_sizes_recv)
 {
-  string_sizes_recv.clear();
-  string_sizes_recv.resize(over_decom_factor);
-
-  for (int ibatch = 0; ibatch < over_decom_factor; ibatch++) {
-    for (cudf::size_type icol = 0; icol < input_table.num_columns(); icol++) {
-      if (input_table.column(icol).type().id() != cudf::type_id::STRING) {
-        string_sizes_recv[ibatch].emplace_back(0, rmm::cuda_stream_default);
-      } else {
-        string_sizes_recv[ibatch].emplace_back(recv_offsets[ibatch].back(),
-                                               rmm::cuda_stream_default);
-      }
+  for (cudf::size_type icol = 0; icol < input_table.num_columns(); icol++) {
+    if (input_table.column(icol).type().id() != cudf::type_id::STRING) {
+      string_sizes_recv.emplace_back(0, rmm::cuda_stream_default);
+    } else {
+      string_sizes_recv.emplace_back(recv_offsets.back(), rmm::cuda_stream_default);
     }
   }
 }

@@ -238,20 +238,22 @@ class AllToAllCommunicator {
    * Note: This custructor needs to be called collectively for all ranks in MPI_COMM_WORLD.
    *
    * @param[in] input_table Table to be all-to-all communicated.
-   * @param[in] num_batches Number of batches.
-   * @param[in] offsets Vector of length `num_batches * mpi_size + 1`, indexed into *input_table*,
-   * representing the start/end row index to send to each rank.
+   * @param[in] offsets Vector of length `mpi_size + 1`, indexed into *input_table*, representing
+   * the start/end row index to send to each rank.
    * @param[in] compression_options Vector of length equal to the number of columns, indicating
    * whether/how each column needs to be compressed before communication.
    * @param[in] explicit_copy_to_self If true, rows destined to the current rank are copied using
    * explicit device-to-device memory copy instead of going through communicator.
    */
   AllToAllCommunicator(cudf::table_view input_table,
-                       int num_batches,
                        std::vector<cudf::size_type> offsets,
                        Communicator *communicator,
                        std::vector<ColumnCompressionOptions> compression_options,
                        bool explicit_copy_to_self);
+
+  AllToAllCommunicator(const AllToAllCommunicator &) = delete;
+  AllToAllCommunicator &operator=(const AllToAllCommunicator &) = delete;
+  AllToAllCommunicator(AllToAllCommunicator &&)                 = default;
 
   /**
    * Allocate the tables after all-to-all communication.
@@ -259,47 +261,41 @@ class AllToAllCommunicator {
    * Note: This function uses the default stream for allocation and is synchronous to the host
    * thread.
    *
-   * @return Vector of length equal to number of batches, where the `i`th entry points to the
-   * allocated table of batch `i`.
+   * @return Allocated table.
    */
-  std::vector<std::unique_ptr<cudf::table>> allocate_communicated_table();
+  std::unique_ptr<cudf::table> allocate_communicated_table();
 
   /**
-   * All-to-all communication of a batch.
+   * Launch the all-to-all communication.
    *
    * Note: This function needs to be called collectively by all ranks in MPI_COMM_WORLD.
    * Note: This function will block the host thread until the communication is completed.
    *
    * @param[in] communicated_table Preallocated table for receiving incoming data.
-   * @param[in] ibatch Batch number to be all-to-all communicated.
    * @param[in] preallocated_pinned_buffer Preallocated page-locked host buffer with size at least
    * `mpi_size * sizeof(size_t)`, used for holding the compressed sizes.
    */
-  void communicate_batch(cudf::mutable_table_view communicated_table,
-                         int ibatch,
-                         bool report_timing               = false,
-                         void *preallocated_pinned_buffer = nullptr);
+  void launch_communication(cudf::mutable_table_view communicated_table,
+                            bool report_timing               = false,
+                            void *preallocated_pinned_buffer = nullptr);
 
  private:
   cudf::table_view input_table;
-  int num_batches;
   Communicator *communicator;
   bool explicit_copy_to_self;
   std::vector<cudf::size_type> send_offsets;
-  // For batch `i`, `recv_offsets[i, j]` represents the start row index in the communicated table
-  // to receive data from rank `j`.
-  std::vector<std::vector<int64_t>> recv_offsets;
-  // For batch `i`, `string_send_offsets[i, j, k]` represents the start index into char subcolumn
-  // to be sent to rank `k` for column `j`. If column `j` is not a string column,
-  // `string_send_offsets[i, j]` will be an empty vector. Otherwise, `string_send_offsets[i, j]`
-  // will be a vector of length `mpi_size + 1`.
-  std::vector<std::vector<std::vector<cudf::size_type>>> string_send_offsets;
-  // For batch `i`, `string_recv_offsets[i, j, k]` represents the start index into char subcolumn
+  // Start row index in the communicated table to receive data from each rank.
+  std::vector<int64_t> recv_offsets;
+  // `string_send_offsets[j, k]` represents the start index into char subcolumn to be sent to rank
+  // `k` for column `j`. If column `j` is not a string column, `string_send_offsets[j]` will be an
+  // empty vector. Otherwise, `string_send_offsets[j]` will be a vector of length `mpi_size + 1`.
+  std::vector<std::vector<cudf::size_type>> string_send_offsets;
+  // `string_recv_offsets[j, k]` represents the start index into char subcolumn
   // to receive data from rank `k` for column `j`. If column `j` is not a string column,
-  // `string_recv_offsets[i, j]` will be an empty vector. Otherwise, `string_recv_offsets[i, j]`
+  // `string_recv_offsets[j]` will be an empty vector. Otherwise, `string_recv_offsets[j]`
   // will be a vector of length `mpi_size + 1`.
-  std::vector<std::vector<std::vector<int64_t>>> string_recv_offsets;
+  std::vector<std::vector<int64_t>> string_recv_offsets;
   std::vector<rmm::device_uvector<cudf::size_type>> string_sizes_to_send;
-  std::vector<std::vector<rmm::device_uvector<cudf::size_type>>> string_sizes_received;
+  std::vector<rmm::device_uvector<cudf::size_type>> string_sizes_received;
   std::vector<ColumnCompressionOptions> compression_options;
 };

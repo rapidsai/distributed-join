@@ -69,13 +69,13 @@ std::unique_ptr<cudf::table> shuffle_on(cudf::table_view const& input,
 
   /* All_to_all communication */
 
-  auto all_to_all_communicator =
-    AllToAllCommunicator(hashed_input->view(), 1, offsets, communicator, compression_options, true);
+  AllToAllCommunicator all_to_all_communicator(
+    hashed_input->view(), offsets, communicator, compression_options, true);
 
-  vector<std::unique_ptr<table>> shuffled = all_to_all_communicator.allocate_communicated_table();
+  std::unique_ptr<table> shuffled = all_to_all_communicator.allocate_communicated_table();
 
-  all_to_all_communicator.communicate_batch(
-    shuffled[0]->mutable_view(), 0, report_timing, preallocated_pinned_buffer);
+  all_to_all_communicator.launch_communication(
+    shuffled->mutable_view(), report_timing, preallocated_pinned_buffer);
 
-  return std::move(shuffled[0]);
+  return shuffled;
 }

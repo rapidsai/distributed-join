@@ -27,29 +27,25 @@
 
 /**
  * Calculate and communicate the number of bytes sent/received during all-to-all communication for
- * all string columns in all batches.
+ * all string columns.
  *
  * Note: This function needs to be called collectively by all ranks in `MPI_COMM_WORLD`.
  *
  * @param[in] table Table that needs to be all-to-all communicated.
- * @param[in] offsets Vector of size `mpi_size * over_decom_factor + 1` indexed into `table`, such
- * that `offsets[i * mpi_size + k]` is the start index of rows needs to be sent to rank `k` during
- * batch `i`.
- * @param[in] over_decom_factor Number of batches.
- * @param[out] string_send_offsets Vector with shape `(num_batches, num_columns, mpi_size + 1)`,
- * such that `string_send_offsets[i,j,k]` representing the start index in the char subcolumn of
- * column `j` that needs to be sent to rank `k` during batch `i`.
- * @param[out] string_recv_offsets Vector with shape `(num_batches, num_columns, mpi_size + 1)`,
- * such that `string_recv_offsets[i,j,k]` representing the start index in the char subcolumn of
- * column `j` that receives data from rank `k` during batch `i`.
+ * @param[in] offsets Vector of size `mpi_size + 1` indexed into `table`, indicating the start row
+ * index to be sent to each rank.
+ * @param[out] string_send_offsets Vector with shape `(num_columns, mpi_size + 1)`,
+ * such that `string_send_offsets[j,k]` representing the start index in the char subcolumn of
+ * column `j` that needs to be sent to rank `k`.
+ * @param[out] string_recv_offsets Vector with shape `(num_columns, mpi_size + 1)`,
+ * such that `string_recv_offsets[j,k]` representing the start index in the char subcolumn of
+ * column `j` that receives data from rank `k`.
  */
-void gather_string_offsets(
-  cudf::table_view table,
-  std::vector<cudf::size_type> const &offsets,
-  const int over_decom_factor,
-  std::vector<std::vector<std::vector<cudf::size_type>>> &string_send_offsets,
-  std::vector<std::vector<std::vector<int64_t>>> &string_recv_offsets,
-  Communicator *communicator);
+void gather_string_offsets(cudf::table_view table,
+                           std::vector<cudf::size_type> const &offsets,
+                           std::vector<std::vector<cudf::size_type>> &string_send_offsets,
+                           std::vector<std::vector<int64_t>> &string_recv_offsets,
+                           Communicator *communicator);
 
 /**
  * Calculate the string size of each row.
@@ -57,11 +53,16 @@ void gather_string_offsets(
  * Note: This function is the reverse of `calculate_string_offsets_from_sizes`.
  *
  * @param[in] input_table Table for which the string sizes are calculated.
- * @param[out] output_sizes Vector of size `num_columns`, where `output_sizes[j]` stores the string
- * size of each row in column `j`.
+ * @param[in] start Start row index.
+ * @param[in] end End row index. Strings with row index [start, end) will be calcualted.
+ * @param[out] output_sizes Vector of size `num_columns`, where `output_sizes[j]` is a device vector
+ * of size `end - start`, storing the string size of each row in column `j`.
  */
 void calculate_string_sizes_from_offsets(
-  cudf::table_view input_table, std::vector<rmm::device_uvector<cudf::size_type>> &output_sizes);
+  cudf::table_view input_table,
+  cudf::size_type start,
+  cudf::size_type end,
+  std::vector<rmm::device_uvector<cudf::size_type>> &output_sizes);
 
 /**
  * Calculate string offsets from sizes.
@@ -82,6 +83,5 @@ void calculate_string_offsets_from_sizes(
  */
 void allocate_string_sizes_receive_buffer(
   cudf::table_view input_table,
-  int over_decom_factor,
-  std::vector<std::vector<int64_t>> recv_offsets,
-  std::vector<std::vector<rmm::device_uvector<cudf::size_type>>> &string_sizes_recv);
+  std::vector<int64_t> recv_offsets,
+  std::vector<rmm::device_uvector<cudf::size_type>> &string_sizes_recv);

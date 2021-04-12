@@ -159,28 +159,39 @@ std::unique_ptr<table> distributed_inner_join(
               << std::endl;
   }
 
-  auto all_to_all_communicator_left = AllToAllCommunicator(hashed_left->view(),
-                                                           over_decom_factor,
-                                                           left_offset,
-                                                           communicator,
-                                                           left_compression_options,
-                                                           true);
+  std::vector<AllToAllCommunicator> all_to_all_communicator_left;
+  std::vector<AllToAllCommunicator> all_to_all_communicator_right;
 
-  auto all_to_all_communicator_right = AllToAllCommunicator(hashed_right->view(),
-                                                            over_decom_factor,
-                                                            right_offset,
-                                                            communicator,
-                                                            right_compression_options,
-                                                            true);
+  for (int ibatch = 0; ibatch < over_decom_factor; ibatch++) {
+    int start_idx = ibatch * mpi_size;
+    int end_idx   = (ibatch + 1) * mpi_size + 1;
 
-  /* Declare storage for the table after all-to-all communication */
+    all_to_all_communicator_left.emplace_back(
+      hashed_left->view(),
+      vector<cudf::size_type>(&left_offset[start_idx], &left_offset[end_idx]),
+      communicator,
+      left_compression_options,
+      true);
 
-  // left table after all-to-all for each batch
-  vector<std::unique_ptr<table>> communicated_left =
-    all_to_all_communicator_left.allocate_communicated_table();
-  // right table after all-to-all for each batch
-  vector<std::unique_ptr<table>> communicated_right =
-    all_to_all_communicator_right.allocate_communicated_table();
+    all_to_all_communicator_right.emplace_back(
+      hashed_right->view(),
+      vector<cudf::size_type>(&right_offset[start_idx], &right_offset[end_idx]),
+      communicator,
+      right_compression_options,
+      true);
+  }
+
+  /* Allocate storage for the table after all-to-all communication */
+
+  vector<std::unique_ptr<table>> communicated_left;
+  vector<std::unique_ptr<table>> communicated_right;
+
+  for (int ibatch = 0; ibatch < over_decom_factor; ibatch++) {
+    communicated_left.push_back(all_to_all_communicator_left[ibatch].allocate_communicated_table());
+
+    communicated_right.push_back(
+      all_to_all_communicator_right[ibatch].allocate_communicated_table());
+  }
 
   // *flags* indicates whether each batch has finished communication
   // *flags* uses std::atomic because unsynchronized access to an object which is modified in one
@@ -208,13 +219,11 @@ std::unique_ptr<table> distributed_inner_join(
   for (int ibatch = 0; ibatch < over_decom_factor; ibatch++) {
     if (report_timing) { start_time = high_resolution_clock::now(); }
 
-    all_to_all_communicator_left.communicate_batch(
-      communicated_left[ibatch]->mutable_view(), ibatch, report_timing, preallocated_pinned_buffer);
+    all_to_all_communicator_left[ibatch].launch_communication(
+      communicated_left[ibatch]->mutable_view(), report_timing, preallocated_pinned_buffer);
 
-    all_to_all_communicator_right.communicate_batch(communicated_right[ibatch]->mutable_view(),
-                                                    ibatch,
-                                                    report_timing,
-                                                    preallocated_pinned_buffer);
+    all_to_all_communicator_right[ibatch].launch_communication(
+      communicated_right[ibatch]->mutable_view(), report_timing, preallocated_pinned_buffer);
 
     // mark the communication of ibatch as finished.
     // the join thread is safe to start performing local join on ibatch
