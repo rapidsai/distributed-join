@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "all_to_all_comm.hpp"
 #include "communicator.hpp"
 #include "compression.hpp"
 
@@ -41,8 +42,19 @@
  */
 std::unique_ptr<cudf::table> shuffle_on(cudf::table_view const& input,
                                         std::vector<cudf::size_type> const& on_columns,
+                                        CommunicationGroup comm_group,
                                         Communicator* communicator,
                                         std::vector<ColumnCompressionOptions> compression_options,
                                         cudf::hash_id hash_function = cudf::hash_id::HASH_MURMUR3,
+                                        uint32_t hash_seed          = cudf::DEFAULT_HASH_SEED,
+                                        bool report_timing          = false,
+                                        void* preallocated_pinned_buffer = nullptr);
+
+std::unique_ptr<cudf::table> shuffle_on(cudf::table_view const& input,
+                                        std::vector<cudf::size_type> const& on_columns,
+                                        Communicator* communicator,
+                                        std::vector<ColumnCompressionOptions> compression_options,
+                                        cudf::hash_id hash_function = cudf::hash_id::HASH_MURMUR3,
+                                        uint32_t hash_seed          = cudf::DEFAULT_HASH_SEED,
                                         bool report_timing          = false,
                                         void* preallocated_pinned_buffer = nullptr);

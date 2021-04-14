@@ -173,6 +173,7 @@ std::pair<std::unique_ptr<cudf::table>, std::unique_ptr<cudf::table>> generate_t
   int mpi_rank, mpi_size;
   MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
+  CommunicationGroup comm_group(mpi_size);
 
   // Generate local build and probe table on each rank
 
@@ -215,8 +216,8 @@ std::pair<std::unique_ptr<cudf::table>, std::unique_ptr<cudf::table>> generate_t
   std::vector<int64_t> build_table_recv_offset;
   std::vector<int64_t> probe_table_recv_offset;
 
-  communicate_sizes(build_table_offset, build_table_recv_offset, communicator);
-  communicate_sizes(probe_table_offset, probe_table_recv_offset, communicator);
+  communicate_sizes(build_table_offset, build_table_recv_offset, comm_group, communicator);
+  communicate_sizes(probe_table_offset, probe_table_recv_offset, comm_group, communicator);
 
   std::vector<std::unique_ptr<cudf::column>> build_table_columns;
   for (cudf::size_type icol = 0; icol < pre_shuffle_build_table->num_columns(); icol++) {
@@ -263,7 +264,7 @@ std::pair<std::unique_ptr<cudf::table>, std::unique_ptr<cudf::table>> generate_t
                                     all_to_all_comm_buffers,
                                     probe_compression_options);
 
-  all_to_all_comm(all_to_all_comm_buffers, communicator, true);
+  all_to_all_comm(all_to_all_comm_buffers, comm_group, communicator, true);
 
   if (communicator->group_by_batch()) communicator->stop();
 

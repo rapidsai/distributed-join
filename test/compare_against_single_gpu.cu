@@ -99,6 +99,7 @@ void run_test(cudf::size_type build_table_size,
               bool is_build_table_key_unique,
               int over_decomposition_factor,
               bool compression,
+              int domain_size,
               Communicator *communicator)
 {
   int mpi_rank;
@@ -146,7 +147,10 @@ void run_test(cudf::size_type build_table_size,
                                                                         communicator,
                                                                         build_compression_options,
                                                                         probe_compression_options,
-                                                                        over_decomposition_factor);
+                                                                        over_decomposition_factor,
+                                                                        false,
+                                                                        nullptr,
+                                                                        domain_size);
 
   /* Send join result from all ranks to the root rank */
 
@@ -206,7 +210,7 @@ void run_test(cudf::size_type build_table_size,
     std::cerr << "Test case (" << dtype_to_string<KEY_T>() << "," << dtype_to_string<PAYLOAD_T>()
               << "," << build_table_size << "," << probe_table_size << "," << selectivity << ","
               << is_build_table_key_unique << "," << over_decomposition_factor << "," << compression
-              << ") passes successfully.\n";
+              << "," << domain_size << ") passes successfully.\n";
   }
 }
 
@@ -221,7 +225,7 @@ int main(int argc, char *argv[])
 
   /* Initialize memory pool */
 
-  const size_t pool_size = 1'500'000'000;  // 1.5GB
+  const size_t pool_size = 8'000'000'000;  // 2GB
 
   registered_memory_resource mr(communicator);
   auto *pool_mr =
@@ -230,34 +234,38 @@ int main(int argc, char *argv[])
 
   /* run test */
 
-  run_test<int32_t, int32_t>(1'000'000, 5'000'000, 0.3, true, 10, false, communicator);
-  run_test<int32_t, int32_t>(1'000'000, 5'000'000, 0.3, true, 10, true, communicator);
-  run_test<int64_t, int64_t>(1'000'000, 5'000'000, 0.3, true, 10, false, communicator);
-  run_test<int64_t, int64_t>(1'000'000, 5'000'000, 0.3, true, 10, true, communicator);
-  run_test<int32_t, int32_t>(1'000'000, 5'000'000, 1.0, true, 10, false, communicator);
-  run_test<int32_t, int32_t>(1'000'000, 5'000'000, 1.0, true, 10, true, communicator);
-  run_test<int64_t, int64_t>(1'000'000, 5'000'000, 1.0, true, 10, false, communicator);
-  run_test<int64_t, int64_t>(1'000'000, 5'000'000, 1.0, true, 10, true, communicator);
-  run_test<int32_t, int32_t>(1'000'000, 1'000'000, 0.3, true, 10, false, communicator);
-  run_test<int32_t, int32_t>(1'000'000, 1'000'000, 0.3, true, 10, true, communicator);
-  run_test<int64_t, int64_t>(1'000'000, 1'000'000, 0.3, true, 10, false, communicator);
-  run_test<int64_t, int64_t>(1'000'000, 1'000'000, 0.3, true, 10, true, communicator);
-  run_test<int32_t, int32_t>(1'000'000, 5'000'000, 0.3, true, 1, false, communicator);
-  run_test<int32_t, int32_t>(1'000'000, 5'000'000, 0.3, true, 1, true, communicator);
-  run_test<int64_t, int64_t>(1'000'000, 5'000'000, 0.3, true, 1, false, communicator);
-  run_test<int64_t, int64_t>(1'000'000, 5'000'000, 0.3, true, 1, true, communicator);
-  run_test<int64_t, cudf::timestamp_D>(1'000'000, 1'000'000, 0.3, true, 1, false, communicator);
-  run_test<int64_t, cudf::timestamp_D>(1'000'000, 1'000'000, 0.3, true, 1, true, communicator);
-  run_test<int64_t, cudf::timestamp_ms>(1'000'000, 1'000'000, 0.3, true, 1, false, communicator);
-  run_test<int64_t, cudf::timestamp_ms>(1'000'000, 1'000'000, 0.3, true, 1, true, communicator);
-  run_test<int64_t, cudf::timestamp_ns>(1'000'000, 1'000'000, 0.3, true, 1, false, communicator);
-  run_test<int64_t, cudf::timestamp_ns>(1'000'000, 1'000'000, 0.3, true, 1, true, communicator);
-  run_test<int64_t, cudf::duration_D>(1'000'000, 1'000'000, 0.3, true, 1, false, communicator);
-  run_test<int64_t, cudf::duration_D>(1'000'000, 1'000'000, 0.3, true, 1, true, communicator);
-  run_test<int64_t, cudf::duration_s>(1'000'000, 1'000'000, 0.3, true, 1, false, communicator);
-  run_test<int64_t, cudf::duration_s>(1'000'000, 1'000'000, 0.3, true, 1, true, communicator);
-  run_test<int64_t, cudf::duration_us>(1'000'000, 1'000'000, 0.3, true, 1, false, communicator);
-  run_test<int64_t, cudf::duration_us>(1'000'000, 1'000'000, 0.3, true, 1, true, communicator);
+  run_test<int32_t, int32_t>(1'000'000, 5'000'000, 0.3, true, 10, false, 1, communicator);
+  run_test<int32_t, int32_t>(1'000'000, 5'000'000, 0.3, true, 10, true, 1, communicator);
+  run_test<int64_t, int64_t>(1'000'000, 5'000'000, 0.3, true, 10, false, 1, communicator);
+  run_test<int64_t, int64_t>(1'000'000, 5'000'000, 0.3, true, 10, true, 1, communicator);
+  run_test<int32_t, int32_t>(1'000'000, 5'000'000, 1.0, true, 10, false, 1, communicator);
+  run_test<int32_t, int32_t>(1'000'000, 5'000'000, 1.0, true, 10, true, 1, communicator);
+  run_test<int64_t, int64_t>(1'000'000, 5'000'000, 1.0, true, 10, false, 1, communicator);
+  run_test<int64_t, int64_t>(1'000'000, 5'000'000, 1.0, true, 10, true, 1, communicator);
+  run_test<int32_t, int32_t>(1'000'000, 1'000'000, 0.3, true, 10, false, 1, communicator);
+  run_test<int32_t, int32_t>(1'000'000, 1'000'000, 0.3, true, 10, true, 1, communicator);
+  run_test<int64_t, int64_t>(1'000'000, 1'000'000, 0.3, true, 10, false, 1, communicator);
+  run_test<int64_t, int64_t>(1'000'000, 1'000'000, 0.3, true, 10, true, 1, communicator);
+  run_test<int32_t, int32_t>(1'000'000, 5'000'000, 0.3, true, 1, false, 1, communicator);
+  run_test<int32_t, int32_t>(1'000'000, 5'000'000, 0.3, true, 1, true, 1, communicator);
+  run_test<int64_t, int64_t>(1'000'000, 5'000'000, 0.3, true, 1, false, 1, communicator);
+  run_test<int64_t, int64_t>(1'000'000, 5'000'000, 0.3, true, 1, true, 1, communicator);
+  run_test<int64_t, cudf::timestamp_D>(1'000'000, 1'000'000, 0.3, true, 1, false, 1, communicator);
+  run_test<int64_t, cudf::timestamp_D>(1'000'000, 1'000'000, 0.3, true, 1, true, 1, communicator);
+  run_test<int64_t, cudf::timestamp_ms>(1'000'000, 1'000'000, 0.3, true, 1, false, 1, communicator);
+  run_test<int64_t, cudf::timestamp_ms>(1'000'000, 1'000'000, 0.3, true, 1, true, 1, communicator);
+  run_test<int64_t, cudf::timestamp_ns>(1'000'000, 1'000'000, 0.3, true, 1, false, 1, communicator);
+  run_test<int64_t, cudf::timestamp_ns>(1'000'000, 1'000'000, 0.3, true, 1, true, 1, communicator);
+  run_test<int64_t, cudf::duration_D>(1'000'000, 1'000'000, 0.3, true, 1, false, 1, communicator);
+  run_test<int64_t, cudf::duration_D>(1'000'000, 1'000'000, 0.3, true, 1, true, 1, communicator);
+  run_test<int64_t, cudf::duration_s>(1'000'000, 1'000'000, 0.3, true, 1, false, 1, communicator);
+  run_test<int64_t, cudf::duration_s>(1'000'000, 1'000'000, 0.3, true, 1, true, 1, communicator);
+  run_test<int64_t, cudf::duration_us>(1'000'000, 1'000'000, 0.3, true, 1, false, 1, communicator);
+  run_test<int64_t, cudf::duration_us>(1'000'000, 1'000'000, 0.3, true, 1, true, 1, communicator);
+  run_test<int32_t, int32_t>(1'000'000, 1'000'000, 0.3, true, 1, false, 2, communicator);
+  run_test<int32_t, int32_t>(1'000'000, 1'000'000, 0.3, true, 1, true, 2, communicator);
+  run_test<int32_t, int32_t>(1'000'000, 1'000'000, 0.3, true, 10, false, 2, communicator);
+  run_test<int32_t, int32_t>(1'000'000, 1'000'000, 0.3, true, 10, true, 2, communicator);
 
   /* Cleanup */
 

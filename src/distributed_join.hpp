@@ -63,8 +63,8 @@
  * concatenation of the returned tables on all ranks.
  */
 std::unique_ptr<cudf::table> distributed_inner_join(
-  cudf::table_view const &left,
-  cudf::table_view const &right,
+  cudf::table_view left,
+  cudf::table_view right,
   std::vector<cudf::size_type> const &left_on,
   std::vector<cudf::size_type> const &right_on,
   Communicator *communicator,
@@ -72,4 +72,5 @@ std::unique_ptr<cudf::table> distributed_inner_join(
   std::vector<ColumnCompressionOptions> right_compression_options,
   int over_decom_factor            = 1,
   bool report_timing               = false,
-  void *preallocated_pinned_buffer = nullptr);
+  void *preallocated_pinned_buffer = nullptr,
+  int domain_size                  = 1);

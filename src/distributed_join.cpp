@@ -20,6 +20,7 @@
 #include "communicator.hpp"
 #include "compression.hpp"
 #include "error.hpp"
+#include "shuffle_on.hpp"
 
 #include <cudf/column/column.hpp>
 #include <cudf/concatenate.hpp>
@@ -105,8 +106,8 @@ static void inner_join_func(vector<std::unique_ptr<table>> &communicated_left,
 }
 
 std::unique_ptr<table> distributed_inner_join(
-  cudf::table_view const &left,
-  cudf::table_view const &right,
+  cudf::table_view left,
+  cudf::table_view right,
   vector<cudf::size_type> const &left_on,
   vector<cudf::size_type> const &right_on,
   Communicator *communicator,
@@ -114,17 +115,43 @@ std::unique_ptr<table> distributed_inner_join(
   vector<ColumnCompressionOptions> right_compression_options,
   int over_decom_factor,
   bool report_timing,
-  void *preallocated_pinned_buffer)
+  void *preallocated_pinned_buffer,
+  int domain_size)
 {
-  if (over_decom_factor == 1) {
-    // @TODO: If over_decom_factor is 1, there is no opportunity for overlapping. Therefore,
-    // we can get away with using just one thread.
-  }
-
   int mpi_rank = communicator->mpi_rank;
   int mpi_size = communicator->mpi_size;
   std::chrono::time_point<high_resolution_clock> start_time;
   std::chrono::time_point<high_resolution_clock> stop_time;
+
+  /* Shuffle in Infiniband domain */
+
+  std::unique_ptr<table> shuffled_left_ib;
+  std::unique_ptr<table> shuffled_right_ib;
+
+  constexpr uint32_t hash_partition_seed_ib = 87654321;
+
+  shuffled_left_ib = shuffle_on(left,
+                                left_on,
+                                CommunicationGroup(mpi_size, domain_size),
+                                communicator,
+                                left_compression_options,
+                                cudf::hash_id::HASH_MURMUR3,
+                                hash_partition_seed_ib,
+                                report_timing,
+                                preallocated_pinned_buffer);
+
+  shuffled_right_ib = shuffle_on(right,
+                                 right_on,
+                                 CommunicationGroup(mpi_size, domain_size),
+                                 communicator,
+                                 right_compression_options,
+                                 cudf::hash_id::HASH_MURMUR3,
+                                 hash_partition_seed_ib,
+                                 report_timing,
+                                 preallocated_pinned_buffer);
+
+  left  = shuffled_left_ib->view();
+  right = shuffled_right_ib->view();
 
   /* Hash partition */
 
@@ -138,16 +165,22 @@ std::unique_ptr<table> distributed_inner_join(
 
   constexpr uint32_t hash_partition_seed = 12345678;
 
-  std::tie(hashed_left, left_offset) = cudf::hash_partition(
-    left, left_on, mpi_size * over_decom_factor, cudf::hash_id::HASH_MURMUR3, hash_partition_seed);
+  std::tie(hashed_left, left_offset) = cudf::hash_partition(left,
+                                                            left_on,
+                                                            domain_size * over_decom_factor,
+                                                            cudf::hash_id::HASH_MURMUR3,
+                                                            hash_partition_seed);
 
   std::tie(hashed_right, right_offset) = cudf::hash_partition(right,
                                                               right_on,
-                                                              mpi_size * over_decom_factor,
+                                                              domain_size * over_decom_factor,
                                                               cudf::hash_id::HASH_MURMUR3,
                                                               hash_partition_seed);
 
   CUDA_RT_CALL(cudaStreamSynchronize(0));
+
+  shuffled_left_ib.reset();
+  shuffled_right_ib.reset();
 
   left_offset.push_back(left.num_rows());
   right_offset.push_back(right.num_rows());
@@ -163,12 +196,13 @@ std::unique_ptr<table> distributed_inner_join(
   std::vector<AllToAllCommunicator> all_to_all_communicator_right;
 
   for (int ibatch = 0; ibatch < over_decom_factor; ibatch++) {
-    int start_idx = ibatch * mpi_size;
-    int end_idx   = (ibatch + 1) * mpi_size + 1;
+    int start_idx = ibatch * domain_size;
+    int end_idx   = (ibatch + 1) * domain_size + 1;
 
     all_to_all_communicator_left.emplace_back(
       hashed_left->view(),
       vector<cudf::size_type>(&left_offset[start_idx], &left_offset[end_idx]),
+      CommunicationGroup(domain_size, 1),
       communicator,
       left_compression_options,
       true);
@@ -176,6 +210,7 @@ std::unique_ptr<table> distributed_inner_join(
     all_to_all_communicator_right.emplace_back(
       hashed_right->view(),
       vector<cudf::size_type>(&right_offset[start_idx], &right_offset[end_idx]),
+      CommunicationGroup(domain_size, 1),
       communicator,
       right_compression_options,
       true);

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "all_to_all_comm.hpp"
 #include "communicator.hpp"
 
 #include <cudf/table/table_view.hpp>
@@ -45,6 +46,7 @@ void gather_string_offsets(cudf::table_view table,
                            std::vector<cudf::size_type> const &offsets,
                            std::vector<std::vector<cudf::size_type>> &string_send_offsets,
                            std::vector<std::vector<int64_t>> &string_recv_offsets,
+                           CommunicationGroup comm_group,
                            Communicator *communicator);
 
 /**

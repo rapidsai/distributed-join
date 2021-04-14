@@ -39,9 +39,10 @@ void gather_string_offsets(cudf::table_view table,
                            std::vector<cudf::size_type> const &offsets,
                            std::vector<std::vector<cudf::size_type>> &string_send_offsets,
                            std::vector<std::vector<int64_t>> &string_recv_offsets,
+                           CommunicationGroup comm_group,
                            Communicator *communicator)
 {
-  int mpi_size = communicator->mpi_size;
+  int ngpus = comm_group.size();
 
   rmm::device_vector<cudf::size_type> d_offsets(offsets);
 
@@ -53,12 +54,12 @@ void gather_string_offsets(cudf::table_view table,
       string_recv_offsets.emplace_back();
       continue;
     } else {
-      string_send_offsets.emplace_back(mpi_size + 1);
-      string_recv_offsets.emplace_back(mpi_size + 1);
+      string_send_offsets.emplace_back(ngpus + 1);
+      string_recv_offsets.emplace_back(ngpus + 1);
     }
 
     // 2. Gather `string_send_offsets` using the offset subcolumn and `d_offsets`
-    rmm::device_vector<cudf::size_type> d_string_send_offsets(mpi_size + 1);
+    rmm::device_vector<cudf::size_type> d_string_send_offsets(ngpus + 1);
     thrust::gather(rmm::exec_policy(),
                    d_offsets.begin(),
                    d_offsets.end(),
@@ -67,11 +68,12 @@ void gather_string_offsets(cudf::table_view table,
                    d_string_send_offsets.begin());
     CUDA_RT_CALL(cudaMemcpy(string_send_offsets[icol].data(),
                             thrust::raw_pointer_cast(d_string_send_offsets.data()),
-                            (mpi_size + 1) * sizeof(cudf::size_type),
+                            (ngpus + 1) * sizeof(cudf::size_type),
                             cudaMemcpyDeviceToHost));
 
     // 3. Communicate string_send_offsets and receive string_recv_offsets
-    communicate_sizes(string_send_offsets[icol], string_recv_offsets[icol], communicator);
+    communicate_sizes(
+      string_send_offsets[icol], string_recv_offsets[icol], comm_group, communicator);
   }
 }
 

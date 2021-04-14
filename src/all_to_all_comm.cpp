@@ -53,57 +53,61 @@ using std::vector;
 
 void communicate_sizes(std::vector<int64_t> const &send_offset,
                        std::vector<int64_t> &recv_offset,
+                       CommunicationGroup comm_group,
                        Communicator *communicator)
 {
-  int mpi_size = communicator->mpi_size;
-  std::vector<int64_t> send_count(mpi_size, -1);
+  int group_size = comm_group.size();
+  vector<int64_t> send_count(group_size, -1);
 
-  for (int irank = 0; irank < mpi_size; irank++) {
-    send_count[irank] = send_offset[irank + 1] - send_offset[irank];
+  for (int local_idx = 0; local_idx < group_size; local_idx++) {
+    send_count[local_idx] = send_offset[local_idx + 1] - send_offset[local_idx];
   }
 
-  std::vector<int64_t> recv_count(mpi_size, -1);
+  vector<int64_t> recv_count(group_size, -1);
 
   // Note: MPI is used for communicating the sizes instead of *Communicator* because
-  // *Communicator* is not guaranteed to be able to send/recv host buffers.
+  // *Communicator* is not guaranteed to work with host buffers.
 
-  std::vector<MPI_Request> send_req(mpi_size);
-  std::vector<MPI_Request> recv_req(mpi_size);
+  vector<MPI_Request> send_req(group_size);
+  vector<MPI_Request> recv_req(group_size);
 
-  for (int irank = 0; irank < mpi_size; irank++) {
-    MPI_CALL(MPI_Isend(&send_count[irank],
+  for (int local_idx = 0; local_idx < group_size; local_idx++) {
+    MPI_CALL(MPI_Isend(&send_count[local_idx],
                        1,
                        MPI_INT64_T,
-                       irank,
+                       comm_group.get_global_rank(local_idx),
                        exchange_size_tag,
                        MPI_COMM_WORLD,
-                       &send_req[irank]));
+                       &send_req[local_idx]));
   }
 
-  for (int irank = 0; irank < mpi_size; irank++) {
-    MPI_CALL(MPI_Irecv(&recv_count[irank],
+  for (int local_idx = 0; local_idx < group_size; local_idx++) {
+    MPI_CALL(MPI_Irecv(&recv_count[local_idx],
                        1,
                        MPI_INT64_T,
-                       irank,
+                       comm_group.get_global_rank(local_idx),
                        exchange_size_tag,
                        MPI_COMM_WORLD,
-                       &recv_req[irank]));
+                       &recv_req[local_idx]));
   }
 
-  MPI_CALL(MPI_Waitall(mpi_size, send_req.data(), MPI_STATUSES_IGNORE));
-  MPI_CALL(MPI_Waitall(mpi_size, recv_req.data(), MPI_STATUSES_IGNORE));
+  MPI_CALL(MPI_Waitall(group_size, send_req.data(), MPI_STATUSES_IGNORE));
+  MPI_CALL(MPI_Waitall(group_size, recv_req.data(), MPI_STATUSES_IGNORE));
 
-  recv_offset.resize(mpi_size + 1, -1);
+  recv_offset.resize(group_size + 1, -1);
   recv_offset[0] = 0;
   std::partial_sum(recv_count.begin(), recv_count.end(), recv_offset.begin() + 1);
 }
 
 void communicate_sizes(std::vector<cudf::size_type> const &send_offset,
                        std::vector<int64_t> &recv_offset,
+                       CommunicationGroup comm_group,
                        Communicator *communicator)
 {
-  communicate_sizes(
-    std::vector<int64_t>(send_offset.begin(), send_offset.end()), recv_offset, communicator);
+  communicate_sizes(std::vector<int64_t>(send_offset.begin(), send_offset.end()),
+                    recv_offset,
+                    comm_group,
+                    communicator);
 }
 
 /**
@@ -122,23 +126,26 @@ void communicate_sizes(std::vector<cudf::size_type> const &send_offset,
 static void send_data_by_offset(const void *data,
                                 std::vector<int64_t> const &offset,
                                 size_t item_size,
+                                CommunicationGroup comm_group,
                                 Communicator *communicator,
                                 bool self_send = true)
 {
   int mpi_rank = communicator->mpi_rank;
-  int mpi_size = communicator->mpi_size;
 
-  for (int itarget_rank = 0; itarget_rank < mpi_size; itarget_rank++) {
-    if (!self_send && itarget_rank == mpi_rank) continue;
+  for (int igpu = 0; igpu < comm_group.size(); igpu++) {
+    int target_rank = comm_group.get_global_rank(igpu);
+
+    if (!self_send && target_rank == mpi_rank) continue;
 
     // calculate the number of elements to send
-    int64_t count = offset[itarget_rank + 1] - offset[itarget_rank];
+    int64_t count = offset[igpu + 1] - offset[igpu];
 
     // calculate the starting address
-    const void *start_addr = (void *)((char *)data + offset[itarget_rank] * item_size);
+    const void *start_addr =
+      static_cast<const void *>(static_cast<const char *>(data) + offset[igpu] * item_size);
 
     // send buffer to the target rank
-    communicator->send(start_addr, count, item_size, itarget_rank);
+    communicator->send(start_addr, count, item_size, target_rank);
   }
 }
 
@@ -159,19 +166,24 @@ static void send_data_by_offset(const void *data,
 static void recv_data_by_offset(void *data,
                                 std::vector<int64_t> const &offset,
                                 size_t item_size,
+                                CommunicationGroup comm_group,
                                 Communicator *communicator,
                                 bool self_recv = true)
 {
   int mpi_rank = communicator->mpi_rank;
-  int mpi_size = communicator->mpi_size;
 
-  for (int isource_rank = 0; isource_rank < mpi_size; isource_rank++) {
-    if (!self_recv && mpi_rank == isource_rank) continue;
+  for (int igpu = 0; igpu < comm_group.size(); igpu++) {
+    int source_rank = comm_group.get_global_rank(igpu);
 
-    communicator->recv((void *)((char *)data + offset[isource_rank] * item_size),
-                       offset[isource_rank + 1] - offset[isource_rank],
-                       item_size,
-                       isource_rank);
+    if (!self_recv && mpi_rank == source_rank) continue;
+
+    // calculate the number of elements to receive
+    int64_t count = offset[igpu + 1] - offset[igpu];
+
+    // calculate the starting address
+    void *start_addr = static_cast<void *>(static_cast<char *>(data) + offset[igpu] * item_size);
+
+    communicator->recv(start_addr, count, item_size, source_rank);
   }
 }
 
@@ -292,13 +304,14 @@ void append_to_all_to_all_comm_buffers(cudf::table_view input,
 }
 
 void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
+                     CommunicationGroup comm_group,
                      Communicator *communicator,
                      bool include_self,
                      bool report_timing,
                      void *preallocated_pinned_buffer)
 {
   int mpi_rank = communicator->mpi_rank;
-  int mpi_size = communicator->mpi_size;
+  int ngpus    = comm_group.size();
 
   double start_time              = 0.0;
   double stop_time               = 0.0;
@@ -309,10 +322,10 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
   size_t *compressed_buffer_sizes_pinned    = static_cast<size_t *>(preallocated_pinned_buffer);
   bool alloc_compressed_buffer_sizes_pinned = false;
 
-  vector<rmm::cuda_stream> compression_streams(mpi_size);
+  vector<rmm::cuda_stream> compression_streams(ngpus);
 
   vector<rmm::cuda_stream_view> compression_stream_views;
-  compression_stream_views.reserve(mpi_size);
+  compression_stream_views.reserve(ngpus);
 
   for (const auto &compression_stream : compression_streams) {
     compression_stream_views.push_back(compression_stream.view());
@@ -325,12 +338,14 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
       send_data_by_offset(buffer.send_buffer,
                           buffer.send_offsets,
                           cudf::size_of(buffer.dtype),
+                          comm_group,
                           communicator,
                           include_self);
 
       recv_data_by_offset(buffer.recv_buffer,
                           buffer.recv_offsets,
                           cudf::size_of(buffer.dtype),
+                          comm_group,
                           communicator,
                           include_self);
 
@@ -353,28 +368,28 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
     if (report_timing) { start_time = MPI_Wtime(); }
 
     if (compressed_buffer_sizes_pinned == nullptr) {
-      CUDA_RT_CALL(cudaMallocHost(&compressed_buffer_sizes_pinned, mpi_size * sizeof(size_t)));
+      CUDA_RT_CALL(cudaMallocHost(&compressed_buffer_sizes_pinned, ngpus * sizeof(size_t)));
       alloc_compressed_buffer_sizes_pinned = true;
     }
 
     // Compress each partition in the send buffer separately and store the result in
     // `compressed_buffers`
-    vector<const void *> uncompressed_data(mpi_size);
-    vector<cudf::size_type> uncompressed_counts(mpi_size);
+    vector<const void *> uncompressed_data(ngpus);
+    vector<cudf::size_type> uncompressed_counts(ngpus);
 
-    for (int irank = 0; irank < mpi_size; irank++) {
-      if (!include_self && irank == mpi_rank) {
-        uncompressed_data[irank]   = nullptr;
-        uncompressed_counts[irank] = 0;
+    for (int igpu = 0; igpu < ngpus; igpu++) {
+      if (!include_self && comm_group.get_global_rank(igpu) == mpi_rank) {
+        uncompressed_data[igpu]   = nullptr;
+        uncompressed_counts[igpu] = 0;
         continue;
       }
-      uncompressed_data[irank] = static_cast<const int8_t *>(buffer.send_buffer) +
-                                 buffer.send_offsets[irank] * cudf::size_of(buffer.dtype);
-      uncompressed_counts[irank] = buffer.send_offsets[irank + 1] - buffer.send_offsets[irank];
+      uncompressed_data[igpu] = static_cast<const int8_t *>(buffer.send_buffer) +
+                                buffer.send_offsets[igpu] * cudf::size_of(buffer.dtype);
+      uncompressed_counts[igpu] = buffer.send_offsets[igpu + 1] - buffer.send_offsets[igpu];
     }
 
     vector<rmm::device_buffer> compressed_buffers;
-    vector<size_t> compressed_buffer_sizes(mpi_size);
+    vector<size_t> compressed_buffer_sizes(ngpus);
 
     cudf::type_dispatcher(buffer.dtype,
                           compression_functor{},
@@ -387,15 +402,14 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
 
     for (auto &stream : compression_streams) stream.synchronize();
 
-    memcpy(
-      compressed_buffer_sizes.data(), compressed_buffer_sizes_pinned, mpi_size * sizeof(size_t));
+    memcpy(compressed_buffer_sizes.data(), compressed_buffer_sizes_pinned, ngpus * sizeof(size_t));
 
     // Calculate and communicate offsets for the compressed buffers
-    buffer.compressed_send_offsets.resize(mpi_size + 1);
+    buffer.compressed_send_offsets.resize(ngpus + 1);
     buffer.compressed_send_offsets[0] = 0;
-    for (int irank = 0; irank < mpi_size; irank++) {
-      buffer.compressed_send_offsets[irank + 1] =
-        buffer.compressed_send_offsets[irank] + compressed_buffer_sizes[irank];
+    for (int igpu = 0; igpu < ngpus; igpu++) {
+      buffer.compressed_send_offsets[igpu + 1] =
+        buffer.compressed_send_offsets[igpu] + compressed_buffer_sizes[igpu];
     }
 
     if (report_timing) {
@@ -406,17 +420,18 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
       total_compressed_size += buffer.compressed_send_offsets.back();
     }
 
-    communicate_sizes(buffer.compressed_send_offsets, buffer.compressed_recv_offsets, communicator);
+    communicate_sizes(
+      buffer.compressed_send_offsets, buffer.compressed_recv_offsets, comm_group, communicator);
 
     // Merge compressed data of all partitions in `compressed_buffers` into a single buffer
     buffer.compressed_send_buffer.resize(buffer.compressed_send_offsets.back());
-    for (int irank = 0; irank < mpi_size; irank++) {
-      if (!include_self && irank == mpi_rank) continue;
+    for (int igpu = 0; igpu < ngpus; igpu++) {
+      if (!include_self && comm_group.get_global_rank(igpu) == mpi_rank) continue;
 
       CUDA_RT_CALL(cudaMemcpy(static_cast<int8_t *>(buffer.compressed_send_buffer.data()) +
-                                buffer.compressed_send_offsets[irank],
-                              compressed_buffers[irank].data(),
-                              compressed_buffer_sizes[irank],
+                                buffer.compressed_send_offsets[igpu],
+                              compressed_buffers[igpu].data(),
+                              compressed_buffer_sizes[igpu],
                               cudaMemcpyDeviceToDevice));
     }
     compressed_buffers.clear();
@@ -430,12 +445,14 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
     send_data_by_offset(buffer.compressed_send_buffer.data(),
                         buffer.compressed_send_offsets,
                         1,
+                        comm_group,
                         communicator,
                         include_self);
 
     recv_data_by_offset(buffer.compressed_recv_buffer.data(),
                         buffer.compressed_recv_offsets,
                         1,
+                        comm_group,
                         communicator,
                         include_self);
 
@@ -456,22 +473,23 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
 }
 
 void postprocess_all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
+                                 CommunicationGroup comm_group,
                                  Communicator *communicator,
                                  bool include_self,
                                  bool report_timing)
 {
   int mpi_rank                   = communicator->mpi_rank;
-  int mpi_size                   = communicator->mpi_size;
+  int ngpus                      = comm_group.size();
   double start_time              = 0.0;
   double stop_time               = 0.0;
   double total_uncompressed_size = 0.0;
 
   if (report_timing) { start_time = MPI_Wtime(); }
 
-  vector<rmm::cuda_stream> decompression_streams(mpi_size);
+  vector<rmm::cuda_stream> decompression_streams(ngpus);
 
   vector<rmm::cuda_stream_view> decompression_stream_views;
-  decompression_stream_views.reserve(mpi_size);
+  decompression_stream_views.reserve(ngpus);
 
   for (const auto &decompression_stream : decompression_streams) {
     decompression_stream_views.push_back(decompression_stream.view());
@@ -481,24 +499,24 @@ void postprocess_all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buf
   for (auto &buffer : all_to_all_comm_buffers) {
     if (buffer.compression_method == CompressionMethod::none) continue;
 
-    vector<const void *> compressed_data(mpi_size);
-    vector<int64_t> compressed_sizes(mpi_size);
-    vector<void *> outputs(mpi_size);
-    vector<int64_t> expected_output_counts(mpi_size);
+    vector<const void *> compressed_data(ngpus);
+    vector<int64_t> compressed_sizes(ngpus);
+    vector<void *> outputs(ngpus);
+    vector<int64_t> expected_output_counts(ngpus);
 
-    for (int irank = 0; irank < mpi_size; irank++) {
-      if (!include_self && irank == mpi_rank) {
-        compressed_sizes[irank]       = 0;
-        expected_output_counts[irank] = 0;
+    for (int igpu = 0; igpu < ngpus; igpu++) {
+      if (!include_self && comm_group.get_global_rank(igpu) == mpi_rank) {
+        compressed_sizes[igpu]       = 0;
+        expected_output_counts[igpu] = 0;
         continue;
       }
-      compressed_data[irank] = static_cast<int8_t *>(buffer.compressed_recv_buffer.data()) +
-                               buffer.compressed_recv_offsets[irank];
-      compressed_sizes[irank] =
-        buffer.compressed_recv_offsets[irank + 1] - buffer.compressed_recv_offsets[irank];
-      outputs[irank] = static_cast<int8_t *>(buffer.recv_buffer) +
-                       buffer.recv_offsets[irank] * cudf::size_of(buffer.dtype);
-      expected_output_counts[irank] = buffer.recv_offsets[irank + 1] - buffer.recv_offsets[irank];
+      compressed_data[igpu] = static_cast<int8_t *>(buffer.compressed_recv_buffer.data()) +
+                              buffer.compressed_recv_offsets[igpu];
+      compressed_sizes[igpu] =
+        buffer.compressed_recv_offsets[igpu + 1] - buffer.compressed_recv_offsets[igpu];
+      outputs[igpu] = static_cast<int8_t *>(buffer.recv_buffer) +
+                      buffer.recv_offsets[igpu] * cudf::size_of(buffer.dtype);
+      expected_output_counts[igpu] = buffer.recv_offsets[igpu + 1] - buffer.recv_offsets[igpu];
     }
 
     cudf::type_dispatcher(buffer.dtype,
@@ -590,9 +608,10 @@ static void copy_to_self(cudf::table_view input_table,
                          vector<vector<int64_t>> const &string_recv_offsets,
                          vector<rmm::device_uvector<cudf::size_type>> const &string_sizes_send,
                          vector<rmm::device_uvector<cudf::size_type>> &string_sizes_recv,
+                         CommunicationGroup comm_group,
                          Communicator *communicator)
 {
-  int mpi_rank = communicator->mpi_rank;
+  int igpu = comm_group.get_local_idx();
 
   for (cudf::size_type icol = 0; icol < input_table.num_columns(); icol++) {
     cudf::data_type dtype = input_table.column(icol).type();
@@ -600,26 +619,25 @@ static void copy_to_self(cudf::table_view input_table,
       // This is a fixed-width column
       cudf::size_type dtype_size = cudf::size_of(dtype);
 
-      CUDA_RT_CALL(cudaMemcpy(
-        static_cast<void *>(communicated_tables.column(icol).head<char>() +
-                            recv_offsets[mpi_rank] * dtype_size),
-        static_cast<const void *>(input_table.column(icol).head<char>() +
-                                  static_cast<int64_t>(send_offsets[mpi_rank]) * dtype_size),
-        (recv_offsets[mpi_rank + 1] - recv_offsets[mpi_rank]) * dtype_size,
-        cudaMemcpyDeviceToDevice));
+      CUDA_RT_CALL(
+        cudaMemcpy(static_cast<void *>(communicated_tables.column(icol).head<char>() +
+                                       recv_offsets[igpu] * dtype_size),
+                   static_cast<const void *>(input_table.column(icol).head<char>() +
+                                             static_cast<int64_t>(send_offsets[igpu]) * dtype_size),
+                   (recv_offsets[igpu + 1] - recv_offsets[igpu]) * dtype_size,
+                   cudaMemcpyDeviceToDevice));
     } else {
       // This is a string column
       CUDA_RT_CALL(
-        cudaMemcpy(string_sizes_recv[icol].data() + recv_offsets[mpi_rank],
-                   string_sizes_send[icol].data() + send_offsets[mpi_rank],
-                   (recv_offsets[mpi_rank + 1] - recv_offsets[mpi_rank]) * sizeof(cudf::size_type),
+        cudaMemcpy(string_sizes_recv[icol].data() + recv_offsets[igpu],
+                   string_sizes_send[icol].data() + send_offsets[igpu],
+                   (recv_offsets[igpu + 1] - recv_offsets[igpu]) * sizeof(cudf::size_type),
                    cudaMemcpyDeviceToDevice));
 
       CUDA_RT_CALL(cudaMemcpy(
-        communicated_tables.column(icol).child(1).head<char>() +
-          string_recv_offsets[icol][mpi_rank],
-        input_table.column(icol).child(1).head<char>() + string_send_offsets[icol][mpi_rank],
-        string_send_offsets[icol][mpi_rank + 1] - string_send_offsets[icol][mpi_rank],
+        communicated_tables.column(icol).child(1).head<char>() + string_recv_offsets[icol][igpu],
+        input_table.column(icol).child(1).head<char>() + string_send_offsets[icol][igpu],
+        string_send_offsets[icol][igpu + 1] - string_send_offsets[icol][igpu],
         cudaMemcpyDeviceToDevice));
     }
   }
@@ -628,10 +646,12 @@ static void copy_to_self(cudf::table_view input_table,
 AllToAllCommunicator::AllToAllCommunicator(
   cudf::table_view input_table,
   std::vector<cudf::size_type> offsets,
+  CommunicationGroup comm_group,
   Communicator *communicator,
   std::vector<ColumnCompressionOptions> compression_options,
   bool explicit_copy_to_self)
   : input_table(input_table),
+    comm_group(comm_group),
     communicator(communicator),
     explicit_copy_to_self(explicit_copy_to_self),
     send_offsets(offsets),
@@ -639,12 +659,12 @@ AllToAllCommunicator::AllToAllCommunicator(
 {
   /* Communicate number of rows */
 
-  communicate_sizes(send_offsets, recv_offsets, communicator);
+  communicate_sizes(send_offsets, recv_offsets, comm_group, communicator);
 
   /* Communicate the number of bytes of string columns */
 
   gather_string_offsets(
-    input_table, send_offsets, string_send_offsets, string_recv_offsets, communicator);
+    input_table, send_offsets, string_send_offsets, string_recv_offsets, comm_group, communicator);
 
   /* Calculate the number of bytes from string offsets */
 
@@ -652,6 +672,21 @@ AllToAllCommunicator::AllToAllCommunicator(
     input_table, offsets.front(), offsets.back(), string_sizes_to_send);
 
   allocate_string_sizes_receive_buffer(input_table, recv_offsets, string_sizes_received);
+}
+
+AllToAllCommunicator::AllToAllCommunicator(
+  cudf::table_view input_table,
+  std::vector<cudf::size_type> offsets,
+  Communicator *communicator,
+  std::vector<ColumnCompressionOptions> compression_options,
+  bool explicit_copy_to_self)
+  : AllToAllCommunicator::AllToAllCommunicator(input_table,
+                                               offsets,
+                                               CommunicationGroup(communicator->mpi_size, 1),
+                                               communicator,
+                                               compression_options,
+                                               explicit_copy_to_self)
+{
 }
 
 std::unique_ptr<cudf::table> AllToAllCommunicator::allocate_communicated_table()
@@ -677,6 +712,7 @@ std::unique_ptr<cudf::table> AllToAllCommunicator::allocate_communicated_table()
                  string_recv_offsets,
                  string_sizes_to_send,
                  string_sizes_received,
+                 comm_group,
                  communicator);
   }
 
@@ -703,6 +739,7 @@ void AllToAllCommunicator::launch_communication(cudf::mutable_table_view communi
   if (communicator->group_by_batch()) communicator->start();
 
   all_to_all_comm(all_to_all_comm_buffers,
+                  comm_group,
                   communicator,
                   !explicit_copy_to_self,
                   report_timing,
@@ -711,7 +748,7 @@ void AllToAllCommunicator::launch_communication(cudf::mutable_table_view communi
   if (communicator->group_by_batch()) communicator->stop();
 
   postprocess_all_to_all_comm(
-    all_to_all_comm_buffers, communicator, !explicit_copy_to_self, report_timing);
+    all_to_all_comm_buffers, comm_group, communicator, !explicit_copy_to_self, report_timing);
 
   calculate_string_offsets_from_sizes(communicated_table, string_sizes_received);
 }
