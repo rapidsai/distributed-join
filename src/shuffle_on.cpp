@@ -44,10 +44,10 @@ std::unique_ptr<cudf::table> shuffle_on(cudf::table_view const& input,
                                         bool report_timing,
                                         void* preallocated_pinned_buffer)
 {
-  int mpi_rank      = communicator->mpi_rank;
-  int ngpus         = comm_group.size();
-  double start_time = 0.0;
-  double stop_time  = 0.0;
+  int mpi_rank        = communicator->mpi_rank;
+  int comm_group_size = comm_group.size();
+  double start_time   = 0.0;
+  double stop_time    = 0.0;
 
   /* Hash partition */
 
@@ -57,7 +57,7 @@ std::unique_ptr<cudf::table> shuffle_on(cudf::table_view const& input,
   if (report_timing) { start_time = MPI_Wtime(); }
 
   std::tie(hashed_input, offsets) =
-    cudf::hash_partition(input, on_columns, ngpus, hash_function, hash_seed);
+    cudf::hash_partition(input, on_columns, comm_group_size, hash_function, hash_seed);
 
   CUDA_RT_CALL(cudaStreamSynchronize(0));
 

@@ -42,7 +42,7 @@ void gather_string_offsets(cudf::table_view table,
                            CommunicationGroup comm_group,
                            Communicator *communicator)
 {
-  int ngpus = comm_group.size();
+  int comm_group_size = comm_group.size();
 
   rmm::device_vector<cudf::size_type> d_offsets(offsets);
 
@@ -54,12 +54,12 @@ void gather_string_offsets(cudf::table_view table,
       string_recv_offsets.emplace_back();
       continue;
     } else {
-      string_send_offsets.emplace_back(ngpus + 1);
-      string_recv_offsets.emplace_back(ngpus + 1);
+      string_send_offsets.emplace_back(comm_group_size + 1);
+      string_recv_offsets.emplace_back(comm_group_size + 1);
     }
 
     // 2. Gather `string_send_offsets` using the offset subcolumn and `d_offsets`
-    rmm::device_vector<cudf::size_type> d_string_send_offsets(ngpus + 1);
+    rmm::device_vector<cudf::size_type> d_string_send_offsets(comm_group_size + 1);
     thrust::gather(rmm::exec_policy(),
                    d_offsets.begin(),
                    d_offsets.end(),
@@ -68,7 +68,7 @@ void gather_string_offsets(cudf::table_view table,
                    d_string_send_offsets.begin());
     CUDA_RT_CALL(cudaMemcpy(string_send_offsets[icol].data(),
                             thrust::raw_pointer_cast(d_string_send_offsets.data()),
-                            (ngpus + 1) * sizeof(cudf::size_type),
+                            (comm_group_size + 1) * sizeof(cudf::size_type),
                             cudaMemcpyDeviceToHost));
 
     // 3. Communicate string_send_offsets and receive string_recv_offsets
