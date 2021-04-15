@@ -105,7 +105,10 @@ inline void check_payload_correctness(cudf::column_view payload_column,
     assert(*(payload_column.child(1).begin<char>() + start_idx) == 'a' + key % 26);
 }
 
-void run_test(cudf::size_type nelements_per_gpu, bool compression, Communicator *communicator)
+void run_test(cudf::size_type nelements_per_gpu,
+              bool compression,
+              Communicator *communicator,
+              int nvlink_domain_size)
 {
   int mpi_rank = communicator->mpi_rank;
   int mpi_size = communicator->mpi_size;
@@ -130,7 +133,10 @@ void run_test(cudf::size_type nelements_per_gpu, bool compression, Communicator 
                                             communicator,
                                             left_compression_options,
                                             right_compression_options,
-                                            1);
+                                            1,
+                                            false,
+                                            nullptr,
+                                            nvlink_domain_size);
 
   assert(join_result->num_columns() == 4);
 
@@ -176,10 +182,11 @@ int main(int argc, char *argv[])
   // Note: temporarily disable some test cases because nvcomp's cascaded selector can raise
   // "Floating point exception" if the input buffer is smaller than sample_size * num_samples.
 
-  // run_test(12'000, true, communicator);
-  run_test(12'000, false, communicator);
-  run_test(120'000, true, communicator);
-  run_test(120'000, false, communicator);
+  // run_test(12'000, true, communicator, 1);
+  run_test(12'000, false, communicator, 1);
+  run_test(120'000, true, communicator, 1);
+  run_test(120'000, false, communicator, 1);
+  run_test(120'000, true, communicator, 2);
 
   /* Cleanup */
 

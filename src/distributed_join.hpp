@@ -73,4 +73,4 @@ std::unique_ptr<cudf::table> distributed_inner_join(
   int over_decom_factor            = 1,
   bool report_timing               = false,
   void *preallocated_pinned_buffer = nullptr,
-  int domain_size                  = 1);
+  int nvlink_domain_size           = 1);

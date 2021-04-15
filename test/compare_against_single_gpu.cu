@@ -225,7 +225,7 @@ int main(int argc, char *argv[])
 
   /* Initialize memory pool */
 
-  const size_t pool_size = 8'000'000'000;  // 2GB
+  const size_t pool_size = 1'500'000'000;  // 1.5GB
 
   registered_memory_resource mr(communicator);
   auto *pool_mr =

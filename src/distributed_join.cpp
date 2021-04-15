@@ -36,6 +36,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -49,6 +50,31 @@ using std::vector;
 using std::chrono::duration_cast;
 using std::chrono::high_resolution_clock;
 using std::chrono::milliseconds;
+
+static int get_nvl_partition_size(int mpi_size, int nvlink_domain_size)
+{
+  if (nvlink_domain_size >= mpi_size) return mpi_size;
+
+  for (int size = ceil(sqrt(mpi_size)); size > 0; size--) {
+    if (mpi_size % size == 0 && size <= nvlink_domain_size) { return size; }
+  }
+
+  return 1;
+}
+
+static std::unique_ptr<table> local_join_helper(cudf::table_view left,
+                                                cudf::table_view right,
+                                                vector<cudf::size_type> const &left_on,
+                                                vector<cudf::size_type> const &right_on)
+{
+  if (left.num_rows() && right.num_rows()) {
+    // Perform local join only when both left and right tables are not empty.
+    // If either is empty, cuDF's inner join will return the other table, which is not desired.
+    return cudf::inner_join(left, right, left_on, right_on);
+  }
+
+  return std::make_unique<table>();
+}
 
 /**
  * Local join thread used for merging incoming partitions and performing local joins.
@@ -87,14 +113,8 @@ static void inner_join_func(vector<std::unique_ptr<table>> &communicated_left,
 
     if (report_timing) { start_time = high_resolution_clock::now(); }
 
-    if (communicated_left[ibatch]->num_rows() && communicated_right[ibatch]->num_rows()) {
-      // Perform local join only when both left and right tables are not empty.
-      // If either is empty, cuDF's inner join will return the other table, which is not desired.
-      batch_join_results[ibatch] = cudf::inner_join(
-        communicated_left[ibatch]->view(), communicated_right[ibatch]->view(), left_on, right_on);
-    } else {
-      batch_join_results[ibatch] = std::make_unique<table>();
-    }
+    batch_join_results[ibatch] = local_join_helper(
+      communicated_left[ibatch]->view(), communicated_right[ibatch]->view(), left_on, right_on);
 
     if (report_timing) {
       stop_time     = high_resolution_clock::now();
@@ -116,42 +136,61 @@ std::unique_ptr<table> distributed_inner_join(
   int over_decom_factor,
   bool report_timing,
   void *preallocated_pinned_buffer,
-  int domain_size)
+  int nvlink_domain_size)
 {
   int mpi_rank = communicator->mpi_rank;
   int mpi_size = communicator->mpi_size;
   std::chrono::time_point<high_resolution_clock> start_time;
   std::chrono::time_point<high_resolution_clock> stop_time;
 
+  int nvlink_partition_size = get_nvl_partition_size(mpi_size, nvlink_domain_size);
+
   /* Shuffle in Infiniband domain */
 
   std::unique_ptr<table> shuffled_left_ib;
   std::unique_ptr<table> shuffled_right_ib;
 
-  constexpr uint32_t hash_partition_seed_ib = 87654321;
+  if (nvlink_partition_size != mpi_size) {
+    constexpr uint32_t hash_partition_seed_ib = 87654321;
 
-  shuffled_left_ib = shuffle_on(left,
-                                left_on,
-                                CommunicationGroup(mpi_size, domain_size),
-                                communicator,
-                                left_compression_options,
-                                cudf::hash_id::HASH_MURMUR3,
-                                hash_partition_seed_ib,
-                                report_timing,
-                                preallocated_pinned_buffer);
+    shuffled_left_ib = shuffle_on(left,
+                                  left_on,
+                                  CommunicationGroup(mpi_size, nvlink_partition_size),
+                                  communicator,
+                                  left_compression_options,
+                                  cudf::hash_id::HASH_MURMUR3,
+                                  hash_partition_seed_ib,
+                                  report_timing,
+                                  preallocated_pinned_buffer);
 
-  shuffled_right_ib = shuffle_on(right,
-                                 right_on,
-                                 CommunicationGroup(mpi_size, domain_size),
-                                 communicator,
-                                 right_compression_options,
-                                 cudf::hash_id::HASH_MURMUR3,
-                                 hash_partition_seed_ib,
-                                 report_timing,
-                                 preallocated_pinned_buffer);
+    shuffled_right_ib = shuffle_on(right,
+                                   right_on,
+                                   CommunicationGroup(mpi_size, nvlink_partition_size),
+                                   communicator,
+                                   right_compression_options,
+                                   cudf::hash_id::HASH_MURMUR3,
+                                   hash_partition_seed_ib,
+                                   report_timing,
+                                   preallocated_pinned_buffer);
 
-  left  = shuffled_left_ib->view();
-  right = shuffled_right_ib->view();
+    left  = shuffled_left_ib->view();
+    right = shuffled_right_ib->view();
+  }
+
+  if (nvlink_partition_size == 1) {
+    if (report_timing) { start_time = high_resolution_clock::now(); }
+
+    auto join_result = local_join_helper(left, right, left_on, right_on);
+
+    if (report_timing) {
+      stop_time     = high_resolution_clock::now();
+      auto duration = duration_cast<milliseconds>(stop_time - start_time);
+      std::cout << "Rank " << mpi_rank << ": Hash partition takes " << duration.count() << "ms"
+                << std::endl;
+    }
+
+    return join_result;
+  }
 
   /* Hash partition */
 
@@ -165,17 +204,19 @@ std::unique_ptr<table> distributed_inner_join(
 
   constexpr uint32_t hash_partition_seed = 12345678;
 
-  std::tie(hashed_left, left_offset) = cudf::hash_partition(left,
-                                                            left_on,
-                                                            domain_size * over_decom_factor,
-                                                            cudf::hash_id::HASH_MURMUR3,
-                                                            hash_partition_seed);
+  std::tie(hashed_left, left_offset) =
+    cudf::hash_partition(left,
+                         left_on,
+                         nvlink_partition_size * over_decom_factor,
+                         cudf::hash_id::HASH_MURMUR3,
+                         hash_partition_seed);
 
-  std::tie(hashed_right, right_offset) = cudf::hash_partition(right,
-                                                              right_on,
-                                                              domain_size * over_decom_factor,
-                                                              cudf::hash_id::HASH_MURMUR3,
-                                                              hash_partition_seed);
+  std::tie(hashed_right, right_offset) =
+    cudf::hash_partition(right,
+                         right_on,
+                         nvlink_partition_size * over_decom_factor,
+                         cudf::hash_id::HASH_MURMUR3,
+                         hash_partition_seed);
 
   CUDA_RT_CALL(cudaStreamSynchronize(0));
 
@@ -196,13 +237,13 @@ std::unique_ptr<table> distributed_inner_join(
   std::vector<AllToAllCommunicator> all_to_all_communicator_right;
 
   for (int ibatch = 0; ibatch < over_decom_factor; ibatch++) {
-    int start_idx = ibatch * domain_size;
-    int end_idx   = (ibatch + 1) * domain_size + 1;
+    int start_idx = ibatch * nvlink_partition_size;
+    int end_idx   = (ibatch + 1) * nvlink_partition_size + 1;
 
     all_to_all_communicator_left.emplace_back(
       hashed_left->view(),
       vector<cudf::size_type>(&left_offset[start_idx], &left_offset[end_idx]),
-      CommunicationGroup(domain_size, 1),
+      CommunicationGroup(nvlink_partition_size, 1),
       communicator,
       left_compression_options,
       true);
@@ -210,7 +251,7 @@ std::unique_ptr<table> distributed_inner_join(
     all_to_all_communicator_right.emplace_back(
       hashed_right->view(),
       vector<cudf::size_type>(&right_offset[start_idx], &right_offset[end_idx]),
-      CommunicationGroup(domain_size, 1),
+      CommunicationGroup(nvlink_partition_size, 1),
       communicator,
       right_compression_options,
       true);

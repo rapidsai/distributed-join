@@ -83,6 +83,7 @@ std::unique_ptr<table> generate_table(cudf::size_type size, int multiple)
 void run_test(cudf::size_type size,  // must be a multiple of 5
               int over_decomposition_factor,
               bool compression,
+              int nvlink_domain_size,
               Communicator *communicator)
 {
   assert(size % 5 == 0);
@@ -128,7 +129,10 @@ void run_test(cudf::size_type size,  // must be a multiple of 5
                                             communicator,
                                             left_compression_options,
                                             right_compression_options,
-                                            over_decomposition_factor);
+                                            over_decomposition_factor,
+                                            false,
+                                            nullptr,
+                                            nvlink_domain_size);
 
   /* Merge table from worker ranks to the root rank */
 
@@ -155,7 +159,7 @@ void run_test(cudf::size_type size,  // must be a multiple of 5
 
     CUDA_RT_CALL(cudaDeviceSynchronize());
     std::cerr << "Test case (" << size << "," << over_decomposition_factor << "," << compression
-              << ") passes successfully.\n";
+              << "," << nvlink_domain_size << ") passes successfully.\n";
   }
 }
 
@@ -187,13 +191,14 @@ int main(int argc, char *argv[])
   // Note: temporarily disable some test cases because nvcomp's cascaded selector can raise
   // "Floating point exception" if the input buffer is smaller than sample_size * num_samples.
 
-  run_test(30'000, 1, false, communicator);
-  run_test(300'000, 1, false, communicator);
-  // run_test(300'000, 1, true, communicator);
-  run_test(300'000, 4, false, communicator);
-  // run_test(300'000, 4, true, communicator);
-  run_test(3'000'000, 1, true, communicator);
-  run_test(3'000'000, 4, true, communicator);
+  run_test(30'000, 1, false, 1, communicator);
+  run_test(300'000, 1, false, 1, communicator);
+  // run_test(300'000, 1, true, 1, communicator);
+  run_test(300'000, 4, false, 1, communicator);
+  // run_test(300'000, 4, true, 1, communicator);
+  run_test(3'000'000, 1, true, 1, communicator);
+  run_test(3'000'000, 4, true, 1, communicator);
+  run_test(3'000'000, 4, true, 2, communicator);
 
   /* Cleanup */
 
