@@ -37,6 +37,7 @@
  * @param[in] compression_options Vector of length equal to the number of columns in *input*,
  * indicating whether/how each column needs to be compressed before communication.
  * @param[in] hash_function Hash function used for computing the hash value of each row.
+ * @param[in] hash_seed Hash seed used with *hash_function*.
  * @param[in] preallocated_pinned_buffer Preallocated page-locked host buffer with size at least
  * `mpi_size * sizeof(size_t)`, used for holding the compressed sizes.
  */
@@ -50,6 +51,9 @@ std::unique_ptr<cudf::table> shuffle_on(cudf::table_view const& input,
                                         bool report_timing          = false,
                                         void* preallocated_pinned_buffer = nullptr);
 
+/**
+ * This variant of *shuffle_on* uses a communication group with all ranks and stride 1.
+ */
 std::unique_ptr<cudf::table> shuffle_on(cudf::table_view const& input,
                                         std::vector<cudf::size_type> const& on_columns,
                                         Communicator* communicator,

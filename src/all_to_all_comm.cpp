@@ -111,13 +111,13 @@ void communicate_sizes(std::vector<cudf::size_type> const &send_offset,
 }
 
 /**
- * Send data from the current rank to other ranks according to offset.
+ * Send data from the current rank to other ranks in *comm_group* according to offset.
  *
  * Note: This call should be enclosed by communicator->start() and communicator->stop().
  *
  * @param[in] data                The starting address of data to be sent in device buffer.
- * @param[in] offset              Vector of length mpi_size + 1. Items in *data* with indicies from
- * offset[i] to offset[i+1] will be sent to rank i.
+ * @param[in] offset              Vector of length `comm_group_size + 1`. Items in *data* with
+ * indicies from offset[i] to offset[i+1] will be sent to local index i in the communication group.
  * @param[in] item_size           The size of each item.
  * @param[in] communicator        An instance of 'Communicator' used for communication.
  * @param[in] self_send           Whether sending data to itself. If this argument is false, items
@@ -154,9 +154,9 @@ static void send_data_by_offset(const void *data,
  *
  * Note: This call should be enclosed by communicator->start() and communicator->stop().
  *
- * @param[out] data         Items received from all ranks will be placed contiguously in *data*.
- *     This argument needs to be preallocated.
- * @param[in] offset        The items received from rank i will be stored at the start of
+ * @param[out] data         Items received from all ranks in the communication group will be placed
+ * contiguously in *data*. This argument needs to be preallocated.
+ * @param[in] offset        The items received from local rank `i` will be stored at the start of
  * `data[offset[i]]`.
  * @param[in] item_size     The size of each item.
  * @param[in] communicator  An instance of 'Communicator' used for communication.
@@ -552,10 +552,10 @@ void postprocess_all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buf
  * Allocate the table after all-to-all communication.
  *
  * @param[in] input_table Table that needs to be all-to-all communicated.
- * @param[in] recv_offsets Vector of size `mpi_size + 1`, indicating the start row index in
- * *input_table* to be sent to each rank.
- * @param[in] string_recv_offsets Vector with shape `(num_columns, mpi_size + 1)`. The output of
- * `gather_string_offsets`.
+ * @param[in] recv_offsets Vector of size `comm_group_size + 1`, indicating the start row index in
+ * *input_table* to receive from each rank in the communication group.
+ * @param[in] string_recv_offsets Vector with shape `(num_columns, comm_group_size + 1)`. The output
+ * of `gather_string_offsets`.
  *
  * @return Allocated table after all-to-all communication.
  */
@@ -592,16 +592,16 @@ static std::unique_ptr<table> allocate_communicated_table_helper(
  *
  * @param[in] input_table Table to be all-to-all communicated.
  * @param[in] communicated_tables Table after all-to-all communication.
- * @param[in] send_offset Vector of size `mpi_size + 1` indicating the start row index of
+ * @param[in] send_offset Vector of size `comm_group_size + 1` indicating the start row index of
  * `input_table` to be sent to each rank.
- * @param[in] recv_offset Vector of size `mpi_size + 1` indicating the start row index of
+ * @param[in] recv_offset Vector of size `comm_group_size + 1` indicating the start row index of
  * `communicated_tables` to receive data from each rank.
- * @param[in] string_send_offsets Vector with shape `(num_columns, mpi_size + 1)`, such that
+ * @param[in] string_send_offsets Vector with shape `(num_columns, comm_group_size + 1)`, such that
  * `string_send_offsets[j,k]` representing the start index in the char subcolumn of column `j` that
- * needs to be sent to rank `k`.
- * @param[in] string_recv_offsets Vector with shape `(num_columns, mpi_size + 1)`, such that
+ * needs to be sent to local rank `k`.
+ * @param[in] string_recv_offsets Vector with shape `(num_columns, comm_group_size + 1)`, such that
  * `string_recv_offsets[j,k]` representing the start index in the char subcolumn of column `j` that
- * receives data from rank `k`.
+ * receives data from local rank `k`.
  * @param[in] string_sizes_send String sizes of each row for all string columns.
  * @param[in] string_sizes_recv Receive buffers for string sizes. This argument needs to be
  * preallocated.

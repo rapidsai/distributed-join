@@ -51,6 +51,12 @@ using std::chrono::duration_cast;
 using std::chrono::high_resolution_clock;
 using std::chrono::milliseconds;
 
+/**
+ * Helper function for getting the number of partitions in NVLink communication stage.
+ *
+ * This function calculates the largest integer that divides *mpi_size* and is not larger than
+ * *nvlink_domain_size*.
+ */
 static int get_nvl_partition_size(int mpi_size, int nvlink_domain_size)
 {
   if (nvlink_domain_size >= mpi_size) return mpi_size;
@@ -83,12 +89,12 @@ static std::unique_ptr<table> local_join_helper(cudf::table_view left,
  * @param[in] communicated_right Right table after all-to-all communication.
  * @param[out] batch_join_results Inner join result of each batch.
  * @param[in] left_on Column indices from the left table to join on. This argument will be
- * passed directly *cudf::inner_join*.
+ * passed directly to *cudf::inner_join*.
  * @param[in] right_on Column indices from the right table to join on. This argument will be
- * passed directly *cudf::inner_join*.
+ * passed directly to *cudf::inner_join*.
  * @param[in] flags *flags[i]* is true if and only if the ith batch has finished the all-to-all
- *     communication.
- * @param[in] report_timing Whether to print the local join time to stderr.
+ * communication.
+ * @param[in] report_timing Whether to print the local join time.
  * @param[in] mr RMM memory resource.
  */
 static void inner_join_func(vector<std::unique_ptr<table>> &communicated_left,

@@ -115,13 +115,13 @@ class CommunicationGroup {
 /**
  * Communicate number of elements recieved from each rank during all-to-all communication.
  *
- * Note: This function needs to be called collectively by all ranks in MPI_COMM_WORLD.
+ * Note: This function needs to be called collectively by all ranks in *comm_group*.
  *
- * @param[in] send_offset Vector of length mpi_size + 1 such that `send_offset[i+1] -
- * send_offset[i]` is the number of elements sent from the current rank to rank i during the
+ * @param[in] send_offset Vector of length `comm_group_size + 1` such that `send_offset[i+1] -
+ * send_offset[i]` is the number of elements sent from the current rank to local rank `i` during the
  * all-to-all communication.
- * @param[out] recv_offset Vector of length mpi_size + 1 such that `recv_offset[i+1] -
- * recv_offset[i]` is the number of elements received from rank i during the all-to-all
+ * @param[out] recv_offset Vector of length `comm_group_size + 1` such that `recv_offset[i+1] -
+ * recv_offset[i]` is the number of elements received from local rank `i` during the all-to-all
  * communication. The vector will be resized in this function and does not need to be preallocated.
  */
 void communicate_sizes(std::vector<int64_t> const &send_offset,
@@ -141,11 +141,11 @@ struct AllToAllCommBuffer {
   const void *send_buffer;
   // the receive buffer for all-to-all communication
   void *recv_buffer;
-  // vector of size `mpi_size + 1`, the start index of items in `send_buffer` to be sent to
+  // vector of size `comm_group_size + 1`, the start index of items in `send_buffer` to be sent to
   // each rank
   std::vector<int64_t> send_offsets;
-  // vector of size `mpi_size + 1`, the start index of items in `recv_buffer` to receive data from
-  // each rank
+  // vector of size `comm_group_size + 1`, the start index of items in `recv_buffer` to receive data
+  // from each rank
   std::vector<int64_t> recv_offsets;
   // data type of each element
   cudf::data_type dtype;
@@ -157,11 +157,11 @@ struct AllToAllCommBuffer {
   rmm::device_buffer compressed_send_buffer;
   // the receive buffer for the compressed data
   rmm::device_buffer compressed_recv_buffer;
-  // vector of size `mpi_size + 1`, the start byte in `compressed_send_buffer` to be sent to each
-  // rank
-  std::vector<int64_t> compressed_send_offsets;
-  // vector of size `mpi_size + 1`, the start byte in `compressed_recv_buffer` to receive data from
+  // vector of size `comm_group_size + 1`, the start byte in `compressed_send_buffer` to be sent to
   // each rank
+  std::vector<int64_t> compressed_send_offsets;
+  // vector of size `comm_group_size + 1`, the start byte in `compressed_recv_buffer` to receive
+  // data from each rank
   std::vector<int64_t> compressed_recv_offsets;
 
   AllToAllCommBuffer(const void *send_buffer,
@@ -192,18 +192,18 @@ struct AllToAllCommBuffer {
  * @param[in] input Table to be all-to-all communicated.
  * @param[in] output Table after all-to-all communication. This argument needs to be preallocated.
  * The helper function `allocate_communicated_table` can be used to allocate this table.
- * @param[in] send_offset Vector of size `mpi_size + 1` such that `send_offset[i]` represents the
- * start index of `input` to be sent to rank `i`.
- * @param[in] recv_offset Vector of size `mpi_size + 1` such that `recv_offset[i]` represents the
- * start index of `output` to receive data from rank `i`.
- * @param[in] string_send_offsets Vector with shape `(num_columns, mpi_size + 1)`, such
+ * @param[in] send_offset Vector of size `comm_group_size + 1` such that `send_offset[i]` represents
+ * the start index of `input` to be sent to local rank `i`.
+ * @param[in] recv_offset Vector of size `comm_group_size + 1` such that `recv_offset[i]` represents
+ * the start index of `output` to receive data from local rank `i`.
+ * @param[in] string_send_offsets Vector with shape `(num_columns, comm_group_size + 1)`, such
  * that `string_send_offsets[j,k]` representing the start index in the char subcolumn of column
- * `j` that needs to be sent to rank `k`, for the current batch. The helper function
- * `gather_string_offsets` can be used to generate this field.
- * @param[in] string_recv_offsets Vector with shape `(num_columns, mpi_size + 1)`, such
+ * `j` that needs to be sent to local rank `k`. The helper function `gather_string_offsets` can be
+ * used to generate this field.
+ * @param[in] string_recv_offsets Vector with shape `(num_columns, comm_group_size + 1)`, such
  * that `string_recv_offsets[j,k]` representing the start index in the char subcolumn of column
- * `j` that receives data from rank `k`, for the current batch. The helper function
- * `gather_string_offsets` can be used to generate this field.
+ * `j` that receives data from local rank `k`. The helper function `gather_string_offsets` can be
+ * used to generate this field.
  * @param[in] string_sizes_send String sizes of each row for all string columns. The helper function
  * `calculate_string_sizes_from_offsets` can be used to generate this field.
  * @param[in] string_sizes_recv Receive buffers for string sizes. This argument needs to be
@@ -234,12 +234,12 @@ void append_to_all_to_all_comm_buffers(cudf::table_view input,
                                        std::vector<ColumnCompressionOptions> compression_options);
 
 /**
- * Perform all-to-all communication of a single batch according to plans.
+ * Perform all-to-all communication according to plans.
  *
  * Note: If the communicator supports grouping by batches, this call is nonblocking and should
  * be enclosed by `communicator->start()` and `communicator->stop()`.
  *
- * This function needs to be called collectively by all ranks in MPI_COMM_WORLD.
+ * This function needs to be called collectively by all ranks in *comm_group*.
  *
  * @param[in] all_to_all_comm_buffers Plans for all-to-all communication, generated by
  * `append_to_all_to_all_comm_buffers`. Note that the send/recv offsets specified must be compatible
@@ -248,7 +248,7 @@ void append_to_all_to_all_comm_buffers(cudf::table_view input,
  * @param[in] include_self If true, this function will send the partition destined to the current
  * rank.
  * @param[in] preallocated_pinned_buffer Preallocated page-locked host buffer with size at least
- * `mpi_size * sizeof(size_t)`, used for holding the compressed sizes.
+ * `comm_group_size * sizeof(size_t)`, used for holding the compressed sizes.
  */
 void all_to_all_comm(std::vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
                      CommunicationGroup comm_group,
@@ -283,11 +283,11 @@ class AllToAllCommunicator {
 
  public:
   /**
-   * Note: This custructor needs to be called collectively for all ranks in MPI_COMM_WORLD.
+   * Note: This custructor needs to be called collectively for all ranks in *comm_group*.
    *
    * @param[in] input_table Table to be all-to-all communicated.
-   * @param[in] offsets Vector of length `mpi_size + 1`, indexed into *input_table*, representing
-   * the start/end row index to send to each rank.
+   * @param[in] offsets Vector of length `comm_group_size + 1`, indexed into *input_table*,
+   * representing the start/end row index to send to each rank.
    * @param[in] compression_options Vector of length equal to the number of columns, indicating
    * whether/how each column needs to be compressed before communication.
    * @param[in] explicit_copy_to_self If true, rows destined to the current rank are copied using
@@ -300,6 +300,10 @@ class AllToAllCommunicator {
                        std::vector<ColumnCompressionOptions> compression_options,
                        bool explicit_copy_to_self = false);
 
+  /**
+   * This variant of *AllToAllCommunicator* uses a communication group with all ranks and
+   * stride 1.
+   */
   AllToAllCommunicator(cudf::table_view input_table,
                        std::vector<cudf::size_type> offsets,
                        Communicator *communicator,
@@ -323,12 +327,12 @@ class AllToAllCommunicator {
   /**
    * Launch the all-to-all communication.
    *
-   * Note: This function needs to be called collectively by all ranks in MPI_COMM_WORLD.
+   * Note: This function needs to be called collectively by all ranks in *comm_group*.
    * Note: This function will block the host thread until the communication is completed.
    *
    * @param[in] communicated_table Preallocated table for receiving incoming data.
    * @param[in] preallocated_pinned_buffer Preallocated page-locked host buffer with size at least
-   * `mpi_size * sizeof(size_t)`, used for holding the compressed sizes.
+   * `comm_group_size * sizeof(size_t)`, used for holding the compressed sizes.
    */
   void launch_communication(cudf::mutable_table_view communicated_table,
                             bool report_timing               = false,
@@ -342,14 +346,15 @@ class AllToAllCommunicator {
   std::vector<cudf::size_type> send_offsets;
   // Start row index in the communicated table to receive data from each rank.
   std::vector<int64_t> recv_offsets;
-  // `string_send_offsets[j, k]` represents the start index into char subcolumn to be sent to rank
-  // `k` for column `j`. If column `j` is not a string column, `string_send_offsets[j]` will be an
-  // empty vector. Otherwise, `string_send_offsets[j]` will be a vector of length `mpi_size + 1`.
+  // `string_send_offsets[j, k]` represents the start index into char subcolumn to be sent to local
+  // rank `k` for column `j`. If column `j` is not a string column, `string_send_offsets[j]` will be
+  // an empty vector. Otherwise, `string_send_offsets[j]` will be a vector of length
+  // `comm_group_size + 1`.
   std::vector<std::vector<cudf::size_type>> string_send_offsets;
   // `string_recv_offsets[j, k]` represents the start index into char subcolumn
-  // to receive data from rank `k` for column `j`. If column `j` is not a string column,
+  // to receive data from local rank `k` for column `j`. If column `j` is not a string column,
   // `string_recv_offsets[j]` will be an empty vector. Otherwise, `string_recv_offsets[j]`
-  // will be a vector of length `mpi_size + 1`.
+  // will be a vector of length `comm_group_size + 1`.
   std::vector<std::vector<int64_t>> string_recv_offsets;
   std::vector<rmm::device_uvector<cudf::size_type>> string_sizes_to_send;
   std::vector<rmm::device_uvector<cudf::size_type>> string_sizes_received;

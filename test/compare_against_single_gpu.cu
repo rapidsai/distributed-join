@@ -99,7 +99,7 @@ void run_test(cudf::size_type build_table_size,
               bool is_build_table_key_unique,
               int over_decomposition_factor,
               bool compression,
-              int domain_size,
+              int nvlink_domain_size,
               Communicator *communicator)
 {
   int mpi_rank;
@@ -150,7 +150,7 @@ void run_test(cudf::size_type build_table_size,
                                                                         over_decomposition_factor,
                                                                         false,
                                                                         nullptr,
-                                                                        domain_size);
+                                                                        nvlink_domain_size);
 
   /* Send join result from all ranks to the root rank */
 
@@ -210,7 +210,7 @@ void run_test(cudf::size_type build_table_size,
     std::cerr << "Test case (" << dtype_to_string<KEY_T>() << "," << dtype_to_string<PAYLOAD_T>()
               << "," << build_table_size << "," << probe_table_size << "," << selectivity << ","
               << is_build_table_key_unique << "," << over_decomposition_factor << "," << compression
-              << "," << domain_size << ") passes successfully.\n";
+              << "," << nvlink_domain_size << ") passes successfully.\n";
   }
 }
 
