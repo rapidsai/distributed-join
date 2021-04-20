@@ -65,11 +65,13 @@ std::unique_ptr<cudf::table> shuffle_on(cudf::table_view const& input,
 
   if (report_timing) {
     stop_time = MPI_Wtime();
-    std::cout << "Rank " << mpi_rank << ": Hash partition takes " << (stop_time - start_time) * 1e3
-              << "ms" << std::endl;
+    std::cout << "Rank " << mpi_rank << ": Hash partition in shuffle takes "
+              << (stop_time - start_time) * 1e3 << "ms" << std::endl;
   }
 
   /* All_to_all communication */
+
+  if (report_timing) { start_time = MPI_Wtime(); }
 
   AllToAllCommunicator all_to_all_communicator(
     hashed_input->view(), offsets, comm_group, communicator, compression_options, true);
@@ -78,6 +80,12 @@ std::unique_ptr<cudf::table> shuffle_on(cudf::table_view const& input,
 
   all_to_all_communicator.launch_communication(
     shuffled->mutable_view(), report_timing, preallocated_pinned_buffer);
+
+  if (report_timing) {
+    stop_time = MPI_Wtime();
+    std::cout << "Rank " << mpi_rank << ": All-to-all communication in shuffle takes "
+              << (stop_time - start_time) * 1e3 << "ms" << std::endl;
+  }
 
   return shuffled;
 }

@@ -54,6 +54,8 @@ static std::string COMMUNICATOR_NAME               = "UCX";
 static std::string REGISTRATION_METHOD             = "preregistered";
 static int64_t COMMUNICATOR_BUFFER_SIZE            = 1'600'000'000LL;
 static bool COMPRESSION                            = false;
+static int NVLINK_DOMAIN_SIZE                      = 1;
+static bool REPORT_TIMING                          = false;
 
 void parse_command_line_arguments(int argc, char *argv[])
 {
@@ -83,6 +85,10 @@ void parse_command_line_arguments(int argc, char *argv[])
     if (!strcmp(argv[iarg], "--compression")) { COMPRESSION = true; }
 
     if (!strcmp(argv[iarg], "--registration-method")) { REGISTRATION_METHOD = argv[iarg + 1]; }
+
+    if (!strcmp(argv[iarg], "--nvlink-domain-size")) { NVLINK_DOMAIN_SIZE = atoi(argv[iarg + 1]); }
+
+    if (!strcmp(argv[iarg], "--report-timing")) { REPORT_TIMING = true; }
   }
 }
 
@@ -113,6 +119,7 @@ void report_configuration()
   if (COMMUNICATOR_NAME == "UCX")
     std::cout << "Registration method: " << REGISTRATION_METHOD << std::endl;
   std::cout << "Compression: " << COMPRESSION << std::endl;
+  std::cout << "NVLink domain size: " << NVLINK_DOMAIN_SIZE << std::endl;
   std::cout << "================================" << std::endl;
 }
 
@@ -217,8 +224,9 @@ int main(int argc, char *argv[])
                                                                     left_compression_options,
                                                                     right_compression_options,
                                                                     OVER_DECOMPOSITION_FACTOR,
-                                                                    false,
-                                                                    preallocated_pinned_buffer);
+                                                                    REPORT_TIMING,
+                                                                    preallocated_pinned_buffer,
+                                                                    NVLINK_DOMAIN_SIZE);
 
   MPI_Barrier(MPI_COMM_WORLD);
   double stop = MPI_Wtime();
