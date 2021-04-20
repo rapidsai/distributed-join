@@ -239,6 +239,8 @@ std::unique_ptr<table> distributed_inner_join(
               << std::endl;
   }
 
+  /* Construct AllToAllCommunicator */
+
   std::vector<AllToAllCommunicator> all_to_all_communicator_left;
   std::vector<AllToAllCommunicator> all_to_all_communicator_right;
 
@@ -251,7 +253,7 @@ std::unique_ptr<table> distributed_inner_join(
       vector<cudf::size_type>(&left_offset[start_idx], &left_offset[end_idx]),
       CommunicationGroup(nvlink_partition_size, 1),
       communicator,
-      left_compression_options,
+      generate_none_compression_options(hashed_left->view()),
       true);
 
     all_to_all_communicator_right.emplace_back(
@@ -259,7 +261,7 @@ std::unique_ptr<table> distributed_inner_join(
       vector<cudf::size_type>(&right_offset[start_idx], &right_offset[end_idx]),
       CommunicationGroup(nvlink_partition_size, 1),
       communicator,
-      right_compression_options,
+      generate_none_compression_options(hashed_right->view()),
       true);
   }
 
