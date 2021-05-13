@@ -307,7 +307,7 @@ void append_to_all_to_all_comm_buffers(cudf::table_view input,
 void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
                      CommunicationGroup comm_group,
                      Communicator *communicator,
-                     bool include_self,
+                     bool include_current_rank,
                      bool report_timing,
                      void *preallocated_pinned_buffer)
 {
@@ -341,14 +341,14 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
                           cudf::size_of(buffer.dtype),
                           comm_group,
                           communicator,
-                          include_self);
+                          include_current_rank);
 
       recv_data_by_offset(buffer.recv_buffer,
                           buffer.recv_offsets,
                           cudf::size_of(buffer.dtype),
                           comm_group,
                           communicator,
-                          include_self);
+                          include_current_rank);
 
       if (!communicator->group_by_batch()) communicator->stop();
 
@@ -380,7 +380,7 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
     vector<cudf::size_type> uncompressed_counts(comm_group_size);
 
     for (int local_idx = 0; local_idx < comm_group_size; local_idx++) {
-      if (!include_self && comm_group.get_global_rank(local_idx) == mpi_rank) {
+      if (!include_current_rank && comm_group.get_global_rank(local_idx) == mpi_rank) {
         uncompressed_data[local_idx]   = nullptr;
         uncompressed_counts[local_idx] = 0;
         continue;
@@ -431,7 +431,7 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
     // Merge compressed data of all partitions in `compressed_buffers` into a single buffer
     buffer.compressed_send_buffer.resize(buffer.compressed_send_offsets.back());
     for (int local_idx = 0; local_idx < comm_group_size; local_idx++) {
-      if (!include_self && comm_group.get_global_rank(local_idx) == mpi_rank) continue;
+      if (!include_current_rank && comm_group.get_global_rank(local_idx) == mpi_rank) continue;
 
       CUDA_RT_CALL(cudaMemcpy(static_cast<int8_t *>(buffer.compressed_send_buffer.data()) +
                                 buffer.compressed_send_offsets[local_idx],
@@ -452,14 +452,14 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
                         1,
                         comm_group,
                         communicator,
-                        include_self);
+                        include_current_rank);
 
     recv_data_by_offset(buffer.compressed_recv_buffer.data(),
                         buffer.compressed_recv_offsets,
                         1,
                         comm_group,
                         communicator,
-                        include_self);
+                        include_current_rank);
 
     if (!communicator->group_by_batch()) communicator->stop();
   }
@@ -480,7 +480,7 @@ void all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
 void postprocess_all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
                                  CommunicationGroup comm_group,
                                  Communicator *communicator,
-                                 bool include_self,
+                                 bool include_current_rank,
                                  bool report_timing)
 {
   int mpi_rank                   = communicator->mpi_rank;
@@ -510,7 +510,7 @@ void postprocess_all_to_all_comm(vector<AllToAllCommBuffer> &all_to_all_comm_buf
     vector<int64_t> expected_output_counts(comm_group_size);
 
     for (int local_idx = 0; local_idx < comm_group_size; local_idx++) {
-      if (!include_self && comm_group.get_global_rank(local_idx) == mpi_rank) {
+      if (!include_current_rank && comm_group.get_global_rank(local_idx) == mpi_rank) {
         compressed_sizes[local_idx]       = 0;
         expected_output_counts[local_idx] = 0;
         continue;
@@ -585,17 +585,18 @@ static std::unique_ptr<table> allocate_communicated_table_helper(
 }
 
 /**
- * Explicitly copy data destined to the current rank during all-to-all communication.
+ * Explicitly copy the part of the input table destined to the current rank during all-to-all
+ * communication to the communicated table.
  *
- * This function can be used together with `all_to_all_comm` with `include_self = false` for a
- * complete all-to-all communication.
+ * This function can be used together with `all_to_all_comm` with `include_current_rank = false` for
+ * a complete all-to-all communication.
  *
  * @param[in] input_table Table to be all-to-all communicated.
- * @param[in] communicated_tables Table after all-to-all communication.
+ * @param[in] communicated_table Table after all-to-all communication.
  * @param[in] send_offset Vector of size `comm_group_size + 1` indicating the start row index of
  * `input_table` to be sent to each rank.
  * @param[in] recv_offset Vector of size `comm_group_size + 1` indicating the start row index of
- * `communicated_tables` to receive data from each rank.
+ * `communicated_table` to receive data from each rank.
  * @param[in] string_send_offsets Vector with shape `(num_columns, comm_group_size + 1)`, such that
  * `string_send_offsets[j,k]` representing the start index in the char subcolumn of column `j` that
  * needs to be sent to local rank `k`.
@@ -606,16 +607,17 @@ static std::unique_ptr<table> allocate_communicated_table_helper(
  * @param[in] string_sizes_recv Receive buffers for string sizes. This argument needs to be
  * preallocated.
  */
-static void copy_to_self(cudf::table_view input_table,
-                         cudf::mutable_table_view communicated_tables,
-                         vector<cudf::size_type> const &send_offsets,
-                         vector<int64_t> const &recv_offsets,
-                         vector<vector<cudf::size_type>> const &string_send_offsets,
-                         vector<vector<int64_t>> const &string_recv_offsets,
-                         vector<rmm::device_uvector<cudf::size_type>> const &string_sizes_send,
-                         vector<rmm::device_uvector<cudf::size_type>> &string_sizes_recv,
-                         CommunicationGroup comm_group,
-                         Communicator *communicator)
+static void copy_table_to_current_rank(
+  cudf::table_view input_table,
+  cudf::mutable_table_view communicated_table,
+  vector<cudf::size_type> const &send_offsets,
+  vector<int64_t> const &recv_offsets,
+  vector<vector<cudf::size_type>> const &string_send_offsets,
+  vector<vector<int64_t>> const &string_recv_offsets,
+  vector<rmm::device_uvector<cudf::size_type>> const &string_sizes_send,
+  vector<rmm::device_uvector<cudf::size_type>> &string_sizes_recv,
+  CommunicationGroup comm_group,
+  Communicator *communicator)
 {
   int local_idx = comm_group.get_local_idx();
 
@@ -626,7 +628,7 @@ static void copy_to_self(cudf::table_view input_table,
       cudf::size_type dtype_size = cudf::size_of(dtype);
 
       CUDA_RT_CALL(cudaMemcpy(
-        static_cast<void *>(communicated_tables.column(icol).head<char>() +
+        static_cast<void *>(communicated_table.column(icol).head<char>() +
                             recv_offsets[local_idx] * dtype_size),
         static_cast<const void *>(input_table.column(icol).head<char>() +
                                   static_cast<int64_t>(send_offsets[local_idx]) * dtype_size),
@@ -641,7 +643,7 @@ static void copy_to_self(cudf::table_view input_table,
         cudaMemcpyDeviceToDevice));
 
       CUDA_RT_CALL(cudaMemcpy(
-        communicated_tables.column(icol).child(1).head<char>() +
+        communicated_table.column(icol).child(1).head<char>() +
           string_recv_offsets[icol][local_idx],
         input_table.column(icol).child(1).head<char>() + string_send_offsets[icol][local_idx],
         string_send_offsets[icol][local_idx + 1] - string_send_offsets[icol][local_idx],
@@ -656,11 +658,11 @@ AllToAllCommunicator::AllToAllCommunicator(
   CommunicationGroup comm_group,
   Communicator *communicator,
   std::vector<ColumnCompressionOptions> compression_options,
-  bool explicit_copy_to_self)
+  bool explicit_copy_to_current_rank)
   : input_table(input_table),
     comm_group(comm_group),
     communicator(communicator),
-    explicit_copy_to_self(explicit_copy_to_self),
+    explicit_copy_to_current_rank(explicit_copy_to_current_rank),
     send_offsets(offsets),
     compression_options(compression_options)
 {
@@ -686,44 +688,44 @@ AllToAllCommunicator::AllToAllCommunicator(
   std::vector<cudf::size_type> offsets,
   Communicator *communicator,
   std::vector<ColumnCompressionOptions> compression_options,
-  bool explicit_copy_to_self)
+  bool explicit_copy_to_current_rank)
   : AllToAllCommunicator::AllToAllCommunicator(input_table,
                                                offsets,
                                                CommunicationGroup(communicator->mpi_size, 1),
                                                communicator,
                                                compression_options,
-                                               explicit_copy_to_self)
+                                               explicit_copy_to_current_rank)
 {
 }
 
 std::unique_ptr<cudf::table> AllToAllCommunicator::allocate_communicated_table()
 {
-  std::unique_ptr<cudf::table> communicated_tables =
+  std::unique_ptr<cudf::table> communicated_table =
     allocate_communicated_table_helper(input_table, recv_offsets, string_recv_offsets);
 
   // Synchronization on the default stream is necessary here because subsequently the communicator
   // can use a different stream to receive data into allocated tables
   CUDA_RT_CALL(cudaStreamSynchronize(0));
 
-  if (explicit_copy_to_self) {
+  if (explicit_copy_to_current_rank) {
     // The device-to-device memory copies are performed explicitly here before all-to-all
     // communication and local join, because if they are part of the communication, they could block
     // the host thread (even if they are launched on different streams) while the local join kernel
     // is running, limiting the efficacy of overlapping.
 
-    copy_to_self(input_table,
-                 communicated_tables->mutable_view(),
-                 send_offsets,
-                 recv_offsets,
-                 string_send_offsets,
-                 string_recv_offsets,
-                 string_sizes_to_send,
-                 string_sizes_received,
-                 comm_group,
-                 communicator);
+    copy_table_to_current_rank(input_table,
+                               communicated_table->mutable_view(),
+                               send_offsets,
+                               recv_offsets,
+                               string_send_offsets,
+                               string_recv_offsets,
+                               string_sizes_to_send,
+                               string_sizes_received,
+                               comm_group,
+                               communicator);
   }
 
-  return communicated_tables;
+  return communicated_table;
 }
 
 void AllToAllCommunicator::launch_communication(cudf::mutable_table_view communicated_table,
@@ -748,14 +750,17 @@ void AllToAllCommunicator::launch_communication(cudf::mutable_table_view communi
   all_to_all_comm(all_to_all_comm_buffers,
                   comm_group,
                   communicator,
-                  !explicit_copy_to_self,
+                  !explicit_copy_to_current_rank,
                   report_timing,
                   preallocated_pinned_buffer);
 
   if (communicator->group_by_batch()) communicator->stop();
 
-  postprocess_all_to_all_comm(
-    all_to_all_comm_buffers, comm_group, communicator, !explicit_copy_to_self, report_timing);
+  postprocess_all_to_all_comm(all_to_all_comm_buffers,
+                              comm_group,
+                              communicator,
+                              !explicit_copy_to_current_rank,
+                              report_timing);
 
   calculate_string_offsets_from_sizes(communicated_table, string_sizes_received);
 }

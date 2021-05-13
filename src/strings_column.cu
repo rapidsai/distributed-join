@@ -27,10 +27,11 @@
 #include <rmm/device_vector.hpp>
 #include <rmm/exec_policy.hpp>
 
-#include <thrust/adjacent_difference.h>
 #include <thrust/device_ptr.h>
+#include <thrust/functional.h>
 #include <thrust/gather.h>
 #include <thrust/scan.h>
+#include <thrust/transform.h>
 
 #include <cstdint>
 #include <vector>
@@ -47,33 +48,33 @@ void gather_string_offsets(cudf::table_view table,
   rmm::device_vector<cudf::size_type> d_offsets(offsets);
 
   for (cudf::size_type icol = 0; icol < table.num_columns(); icol++) {
-    // 1. If not a string column, push an empty vector
     cudf::data_type dtype = table.column(icol).type();
     if (dtype.id() != cudf::type_id::STRING) {
+      // 1. If not a string column, push an empty vector
       string_send_offsets.emplace_back();
       string_recv_offsets.emplace_back();
       continue;
     } else {
       string_send_offsets.emplace_back(comm_group_size + 1);
       string_recv_offsets.emplace_back(comm_group_size + 1);
+
+      // 2. Gather `string_send_offsets` using the offset subcolumn and `d_offsets`
+      rmm::device_vector<cudf::size_type> d_string_send_offsets(comm_group_size + 1);
+      thrust::gather(rmm::exec_policy(),
+                     d_offsets.begin(),
+                     d_offsets.end(),
+                     thrust::device_ptr<const cudf::size_type>(
+                       table.column(icol).child(0).head<cudf::size_type>()),
+                     d_string_send_offsets.begin());
+      CUDA_RT_CALL(cudaMemcpy(string_send_offsets[icol].data(),
+                              thrust::raw_pointer_cast(d_string_send_offsets.data()),
+                              (comm_group_size + 1) * sizeof(cudf::size_type),
+                              cudaMemcpyDeviceToHost));
+
+      // 3. Communicate string_send_offsets and receive string_recv_offsets
+      communicate_sizes(
+        string_send_offsets[icol], string_recv_offsets[icol], comm_group, communicator);
     }
-
-    // 2. Gather `string_send_offsets` using the offset subcolumn and `d_offsets`
-    rmm::device_vector<cudf::size_type> d_string_send_offsets(comm_group_size + 1);
-    thrust::gather(rmm::exec_policy(),
-                   d_offsets.begin(),
-                   d_offsets.end(),
-                   thrust::device_ptr<const cudf::size_type>(
-                     table.column(icol).child(0).head<cudf::size_type>()),
-                   d_string_send_offsets.begin());
-    CUDA_RT_CALL(cudaMemcpy(string_send_offsets[icol].data(),
-                            thrust::raw_pointer_cast(d_string_send_offsets.data()),
-                            (comm_group_size + 1) * sizeof(cudf::size_type),
-                            cudaMemcpyDeviceToHost));
-
-    // 3. Communicate string_send_offsets and receive string_recv_offsets
-    communicate_sizes(
-      string_send_offsets[icol], string_recv_offsets[icol], comm_group, communicator);
   }
 }
 
@@ -94,25 +95,16 @@ void calculate_string_sizes_from_offsets(
 
     output_sizes.emplace_back(end - begin, rmm::cuda_stream_default);
 
-    // thrust::adjacent_difference will copy the first element to the output, which we do not want
-    // here. To get around this problem, thrust::adjacent_difference will write to a temporary
-    // buffer, and we will copy from the temporary buffer to `output_sizes` starting at the second
-    // element.
-
-    rmm::device_uvector<cudf::size_type> temp_buffer(end - begin + 1, rmm::cuda_stream_default);
-
-    thrust::adjacent_difference(
+    thrust::transform(
       // rmm::exec_policy(rmm::cuda_stream_default),
       thrust::device_ptr<const cudf::size_type>(
-        input_column.child(0).begin<const cudf::size_type>() + begin),
+        input_column.child(0).begin<const cudf::size_type>() + begin + 1),
       thrust::device_ptr<const cudf::size_type>(
         input_column.child(0).begin<const cudf::size_type>() + end + 1),
-      temp_buffer.begin());
-
-    CUDA_RT_CALL(cudaMemcpy(output_sizes[icol].data(),
-                            temp_buffer.data() + 1,
-                            (end - begin) * sizeof(cudf::size_type),
-                            cudaMemcpyDeviceToDevice));
+      thrust::device_ptr<const cudf::size_type>(
+        input_column.child(0).begin<const cudf::size_type>() + begin),
+      thrust::device_ptr<cudf::size_type>(output_sizes[icol].data()),
+      thrust::minus<cudf::size_type>());
   }
 }
 

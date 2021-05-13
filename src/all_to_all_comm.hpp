@@ -245,15 +245,15 @@ void append_to_all_to_all_comm_buffers(cudf::table_view input,
  * `append_to_all_to_all_comm_buffers`. Note that the send/recv offsets specified must be compatible
  * with *comm_group*.
  * @param[in] communicator An instance of `Communicator` used for communication.
- * @param[in] include_self If true, this function will send the partition destined to the current
- * rank.
+ * @param[in] include_current_rank If true, this function will send the partition destined to the
+ * current rank.
  * @param[in] preallocated_pinned_buffer Preallocated page-locked host buffer with size at least
  * `comm_group_size * sizeof(size_t)`, used for holding the compressed sizes.
  */
 void all_to_all_comm(std::vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
                      CommunicationGroup comm_group,
                      Communicator *communicator,
-                     bool include_self                = true,
+                     bool include_current_rank        = true,
                      bool report_timing               = false,
                      void *preallocated_pinned_buffer = nullptr);
 
@@ -265,8 +265,8 @@ void all_to_all_comm(std::vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
 void postprocess_all_to_all_comm(std::vector<AllToAllCommBuffer> &all_to_all_comm_buffers,
                                  CommunicationGroup comm_group,
                                  Communicator *communicator,
-                                 bool include_self  = true,
-                                 bool report_timing = false);
+                                 bool include_current_rank = true,
+                                 bool report_timing        = false);
 
 /**
  * High-level interface for all-to-all communicating a cuDF table.
@@ -290,15 +290,15 @@ class AllToAllCommunicator {
    * representing the start/end row index to send to each rank.
    * @param[in] compression_options Vector of length equal to the number of columns, indicating
    * whether/how each column needs to be compressed before communication.
-   * @param[in] explicit_copy_to_self If true, rows destined to the current rank are copied using
-   * explicit device-to-device memory copy instead of going through communicator.
+   * @param[in] explicit_copy_to_current_rank If true, rows destined to the current rank are copied
+   * using explicit device-to-device memory copy instead of going through communicator.
    */
   AllToAllCommunicator(cudf::table_view input_table,
                        std::vector<cudf::size_type> offsets,
                        CommunicationGroup comm_group,
                        Communicator *communicator,
                        std::vector<ColumnCompressionOptions> compression_options,
-                       bool explicit_copy_to_self = false);
+                       bool explicit_copy_to_current_rank = false);
 
   /**
    * This variant of *AllToAllCommunicator* uses a communication group with all ranks and
@@ -308,7 +308,7 @@ class AllToAllCommunicator {
                        std::vector<cudf::size_type> offsets,
                        Communicator *communicator,
                        std::vector<ColumnCompressionOptions> compression_options,
-                       bool explicit_copy_to_self = false);
+                       bool explicit_copy_to_current_rank = false);
 
   AllToAllCommunicator(const AllToAllCommunicator &) = delete;
   AllToAllCommunicator &operator=(const AllToAllCommunicator &) = delete;
@@ -342,7 +342,7 @@ class AllToAllCommunicator {
   cudf::table_view input_table;
   CommunicationGroup comm_group;
   Communicator *communicator;
-  bool explicit_copy_to_self;
+  bool explicit_copy_to_current_rank;
   std::vector<cudf::size_type> send_offsets;
   // Start row index in the communicated table to receive data from each rank.
   std::vector<int64_t> recv_offsets;
