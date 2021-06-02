@@ -18,7 +18,7 @@
 
 #include "../src/compression.hpp"
 
-#include <cascaded.hpp>
+#include <nvcomp/cascaded.hpp>
 
 #include <cudf/column/column_view.hpp>
 #include <cudf/table/table_view.hpp>

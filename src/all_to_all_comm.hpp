@@ -19,7 +19,7 @@
 #include "communicator.hpp"
 #include "compression.hpp"
 
-#include <cascaded.hpp>
+#include <nvcomp/cascaded.hpp>
 
 #include <cudf/table/table.hpp>
 #include <cudf/table/table_view.hpp>
