@@ -48,8 +48,8 @@ set +u && conda activate "join-ci-${CI_ID}" && set -u
 module load cuda/11.0.3
 
 set +u && conda install -c conda-forge awscli && set -u
-set +u && conda install -y -c rapidsai-nightly -c nvidia -c conda-forge -c defaults cudf=0.17 python=3.8 cudatoolkit=11.0 && set -u
-set +u && conda install -y -c rapidsai-nightly -c nvidia -c conda-forge -c defaults ucx ucx-proc=*=gpu nccl && set -u
+set +u && conda install -y -c rapidsai-nightly -c nvidia -c conda-forge cudf=0.17 python=3.8 cudatoolkit=11.0 && set -u
+set +u && conda install -y -c rapidsai-nightly -c nvidia -c conda-forge ucx ucx-proc=*=gpu nccl && set -u
 
 OPENMPI_VERSION=4.0.5
 wget -O "${CI_DIR}/${CI_ID}/openmpi-${OPENMPI_VERSION}.tar.gz" "https://download.open-mpi.org/release/open-mpi/v4.0/openmpi-${OPENMPI_VERSION}.tar.gz"
