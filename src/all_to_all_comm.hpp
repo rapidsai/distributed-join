@@ -97,13 +97,13 @@ class CommunicationGroup {
   }
 
   // Get the size of the communication group
-  int size() { return grid_size / stride; }
+  int size() const { return grid_size / stride; }
 
   // Get the global MPI rank in MPI_COMM_WORLD corresponding to local index in the group
-  int get_global_rank(int local_idx) { return group_start + local_idx * stride; }
+  int get_global_rank(int local_idx) const { return group_start + local_idx * stride; }
 
   // Get the local index in the group corresponding to the current rank
-  int get_local_idx() { return (mpi_rank - group_start) / stride; }
+  int get_local_idx() const { return (mpi_rank - group_start) / stride; }
 
  private:
   int mpi_rank;
