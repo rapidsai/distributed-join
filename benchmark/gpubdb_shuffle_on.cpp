@@ -15,10 +15,10 @@
  */
 
 /*
-This benchmark tests shuffle performance on TPCx-BB "web_clickstreams" table.
+This benchmark tests shuffle performance on GPU-BDB "web_clickstreams" table.
 
 Parameters:
---data-folder      Forder containing the parquet files of TPCx-BB "web_clickstreams" table.
+--data-folder      Forder containing the parquet files of GPU-BDB "web_clickstreams" table.
 --nfiles-per-rank  Number of Parquet files read for input on each rank.
 --compression      If specified, compress data before all-to-all communication.
 */
