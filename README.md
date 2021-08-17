@@ -7,13 +7,17 @@ This proof-of-concept repo implements the distributed repartitioned join algorit
 2. All-to-all communication: send each partition to the corresponding MPI rank so that rows with the same hash values end up in the same rank.
 3. Local join: each MPI rank performs local join independently.
 
-For more information about the algorithm used and optimizations, please refer to [this GTC talk](https://developer.nvidia.com/gtc/2020/video/s21482).
+For more information about the algorithm used and optimizations, please refer to [the ADMS'21 paper](http://www.adms-conf.org/2021-camera-ready/gao_adms21.pdf) and [the presentatiton](http://www.adms-conf.org/2021-camera-ready/gao_presentation.pdf).
 
 For production-quality distributed join implementation, checkout [cuDF's Dask integration](https://rapids.ai/dask.html).
 
+The following plot shows the weak-scaling performance when joining the `l_orderkey` column from lineitem table with the `o_orderkey` and the `o_orderpriority` columns from the orders table on TPC-H dataset with SF100k.
+
+![weak scaling performance](/doc/tpch_perf.svg)
+
 ## Compilation
 
-This project depends on CUDA, UCX, NCCL, MPI, cuDF and nvcomp.
+This project depends on CUDA, UCX, NCCL, MPI, cuDF 0.19 and nvcomp 2.0.
 
 To compile, make sure the variables `CUDA_ROOT`, `CUDF_ROOT`, `MPI_ROOT`, `UCX_ROOT`, `NCCL_ROOT` and `NVCOMP_ROOT` are pointing to the installation path of CUDA, cuDF, MPI, UCX, NCCL and nvcomp repectively.
 
@@ -25,54 +29,6 @@ mkdir build && cd build
 cmake ..
 make -j
 ```
-
-## Command line arguments
-
-`benchmark/distributed_join` accepts the following arguments.
-
-**--key-type {int32_t,int64_t}**
-
-Data type for the key columns. Default: `int64_t`.
-
-**--payload-type {int32_t,int64_t}**
-
-Data type for the payload columns. Default: `int64_t`.
-
-**--build-table-nrows [INTEGER]**
-
-Number of rows in the build table per GPU. Default: `100'000'000`.
-
-**--probe-table-nrows [INTEGER]**
-
-Number of rows in the probe table per GPU. Default: `100'000'000`.
-
-**--selectivity [FLOAT]**
-
-The probability (in range 0.0 - 1.0) of each probe table row has matches in the build table.
-Default: `0.3`.
-
-**--duplicate-build-keys**
-
-If specified, key columns of the build table are allowed to have duplicates.
-
-**--over-decomposition-factor [INTEGER]**
-
-Partition the input tables into (over decomposition factor) * (number of GPUs) buckets, which is
-used for computation-communication overlap. This argument has to be an integer >= 1. Higher number
-means smaller batch size. `1` means no overlap. Default: `1`.
-
-**--communicator [STR]**
-
-This option can be either "UCX" or "NCCL", which controls what communicator to use. Default: `UCX`.
-
-**--registration-method [STR]**
-
-If the UCX communicator is selected, this option can be either "none", "preregistered" or "buffer",
-to control how registration is performed for GPUDirect RDMA.
-- "none": No preregistration.
-- "preregistered": The whole RMM memory pool will be preregistered.
-- "buffer": Preregister a set of communication buffers. The communication in distributed join will
-go through these buffers.
 
 ## Running
 
@@ -128,6 +84,8 @@ Compression: false
 ================================
 Elasped time (s) 0.392133
 ```
+
+For the arguments accepted by each benchmark, please refer to the source files in the `benchmark` folder.
 
 ## Code formatting
 

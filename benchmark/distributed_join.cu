@@ -14,6 +14,57 @@
  * limitations under the License.
  */
 
+/*
+This benchmark runs distributed join on random keys. Both the left and the right tables contain two
+columns. The key column consists of random integers and the payload column consists of row ids.
+
+Parameters:
+
+**--key-type {int32_t,int64_t}**
+
+Data type for the key columns. Default: `int64_t`.
+
+**--payload-type {int32_t,int64_t}**
+
+Data type for the payload columns. Default: `int64_t`.
+
+**--build-table-nrows [INTEGER]**
+
+Number of rows in the build table per GPU. Default: `100'000'000`.
+
+**--probe-table-nrows [INTEGER]**
+
+Number of rows in the probe table per GPU. Default: `100'000'000`.
+
+**--selectivity [FLOAT]**
+
+The probability (in range 0.0 - 1.0) of each probe table row has matches in the build table.
+Default: `0.3`.
+
+**--duplicate-build-keys**
+
+If specified, key columns of the build table are allowed to have duplicates.
+
+**--over-decomposition-factor [INTEGER]**
+
+Partition the input tables into (over decomposition factor) * (number of GPUs) buckets, which is
+used for computation-communication overlap. This argument has to be an integer >= 1. Higher number
+means smaller batch size. `1` means no overlap. Default: `1`.
+
+**--communicator [STR]**
+
+This option can be either "UCX" or "NCCL", which controls what communicator to use. Default: `UCX`.
+
+**--registration-method [STR]**
+
+If the UCX communicator is selected, this option can be either "none", "preregistered" or "buffer",
+to control how registration is performed for GPUDirect RDMA.
+- "none": No preregistration.
+- "preregistered": The whole RMM memory pool will be preregistered.
+- "buffer": Preregister a set of communication buffers. The communication in distributed join will
+go through these buffers.
+*/
+
 #include "../src/communicator.hpp"
 #include "../src/compression.hpp"
 #include "../src/distributed_join.hpp"
