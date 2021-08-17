@@ -19,7 +19,7 @@ RUN git clone https://github.com/rapidsai/cudf.git /cudf \
     && git submodule update --init --remote --recursive \
     && conda env create --name cudf_dev --file conda/environments/cudf_dev_cuda11.0.yml \
     && source activate cudf_dev \
-    && conda install -c rapidsai -c nvidia -c conda-forge -c defaults -y openmpi cmake \
+    && conda install -c rapidsai -c nvidia -c conda-forge -y openmpi cmake \
     && mkdir -p cpp/build \
     && cd cpp/build \
     && cmake .. -DCMAKE_INSTALL_PREFIX=${CONDA_PREFIX} -DCMAKE_CUDA_ARCHITECTURES="70;80" \

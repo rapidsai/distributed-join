@@ -11,9 +11,9 @@ export PATH=${PATH}:/conda/bin
 cd /root
 conda create -y --name join
 source activate join
-conda install -y -c rapidsai -c nvidia -c conda-forge -c defaults cudf=0.19 python=3.8 cudatoolkit=11.0
-conda install -y -c rapidsai -c nvidia -c conda-forge -c defaults ucx ucx-proc=*=gpu nccl openmpi
-conda install -y -c conda-forge -c defaults cmake
+conda install -y -c rapidsai -c nvidia -c conda-forge cudf=0.19 python=3.8 cudatoolkit=11.0
+conda install -y -c rapidsai -c nvidia -c conda-forge ucx ucx-proc=*=gpu nccl openmpi
+conda install -y -c conda-forge cmake
 
 cd /root
 git clone https://github.com/NVIDIA/nvcomp && cd nvcomp
