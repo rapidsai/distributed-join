@@ -60,7 +60,7 @@ RUN apt-get install -y numactl libnuma-dev file pkg-config binutils binutils-dev
 ENV UCX_ROOT=/usr
 
 # Setup nvcomp
-RUN git clone https://github.com/NVIDIA/nvcomp && cd nvcomp && mkdir -p build && cd build \
+RUN git clone https://github.com/NVIDIA/nvcomp && cd nvcomp && git checkout branch-2.0 && mkdir -p build && cd build \
     && ${CUDF_ROOT}/bin/cmake .. && make -j
 ENV NVCOMP_ROOT=/nvcomp/build
 ENV LD_LIBRARY_PATH=${NVCOMP_ROOT}/lib:${LD_LIBRARY_PATH}
